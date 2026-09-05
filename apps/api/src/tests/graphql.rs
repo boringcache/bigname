@@ -1489,6 +1489,42 @@ async fn graphql_point_list_and_inventory_reject_targets_ahead_of_head() -> Resu
     .bind(GRAPHQL_ALICE_NAMEHASH)
     .execute(&database.lookup_pool)
     .await?;
+    let membership_rows = sqlx::query(
+        r#"
+        UPDATE bigname_phase.address_names_current
+        SET chain_positions = jsonb_set(chain_positions, '{target_block_number}', '415')
+        WHERE logical_name_id = 'ens:' || $1
+          AND relation = 'effective_controller'
+        "#,
+    )
+    .bind(GRAPHQL_ALICE_NAMEHASH)
+    .execute(&database.lookup_pool)
+    .await?;
+    assert_eq!(membership_rows.rows_affected(), 1);
+    for owner_filter in [
+        json!({ "owner": GRAPHQL_OWNER }),
+        json!({ "owner_contains": "000a" }),
+    ] {
+        let membership_target = post_graphql_allow_errors(
+            database.app_state(),
+            r#"query Domains($where: Domain_filter!) { domains(where: $where) { name } }"#,
+            json!({ "where": owner_filter }),
+        )
+        .await?;
+        assert_eq!(membership_target["data"]["domains"], Value::Null);
+        assert!(membership_target["errors"].as_array().is_some_and(|errors| !errors.is_empty()));
+    }
+    sqlx::query(
+        r#"
+        UPDATE bigname_phase.address_names_current
+        SET chain_positions = jsonb_set(chain_positions, '{target_block_number}', '411')
+        WHERE logical_name_id = 'ens:' || $1
+          AND relation = 'effective_controller'
+        "#,
+    )
+    .bind(GRAPHQL_ALICE_NAMEHASH)
+    .execute(&database.lookup_pool)
+    .await?;
     seed_alice_record_inventory(&database).await?;
     sqlx::query(
         r#"
@@ -1578,7 +1614,7 @@ async fn graphql_lists_and_counts_scope_rows_to_the_selected_snapshot_chains() -
     .bind(GRAPHQL_ALICE_NAMEHASH)
     .execute(&database.lookup_pool)
     .await?;
-    sqlx::query(
+    let other_chain_relations = sqlx::query(
         r#"
         INSERT INTO bigname_phase.address_names_current (
             address, logical_name_id, relation, namespace, raw_name, namehash,
@@ -1600,14 +1636,14 @@ async fn graphql_lists_and_counts_scope_rows_to_the_selected_snapshot_chains() -
                ), canonicality_summary, manifest_version
         FROM bigname_phase.address_names_current
         WHERE logical_name_id = 'ens:' || $1
-          AND relation = 'token_holder'
-        LIMIT 1
+          AND relation IN ('token_holder', 'effective_controller')
         "#,
     )
     .bind(GRAPHQL_ALICE_NAMEHASH)
     .bind(GRAPHQL_OTHER_CHAIN_HOLDER)
     .execute(&database.lookup_pool)
     .await?;
+    assert_eq!(other_chain_relations.rows_affected(), 2);
 
     let payload = post_graphql(
         database.app_state(),
