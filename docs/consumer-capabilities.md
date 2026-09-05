@@ -672,16 +672,18 @@ names, `owner: A` plus `owner_contains: "abc"` cannot combine matches from rows 
 and C, while `owner: A` plus `owner_not_contains: "abc"` is rejected when row C
 matches `abc`.
 
-`owner` and `owner_in` use relation-bounded address membership. Owner ranges,
-patterns, and negative members use a name-correlated relation probe. With ID
-order or a bounded ID predicate, that probe is page-driven only while matching
-rows occur early enough in the requested direction to fill the page. A rare
-owner, or matches late in the requested direction, can walk the complete ordered
-names relation. Non-ID orders also have linear cost because the relation probe
-runs before sorting. Issue `#831` owns index support for those linear cases.
-Omitted and explicit-null `owner` or `owner_in` are equivalent. Each of the 18
-other owner members rejects explicit null as `Domain_filter.<member> must not be
-null`; empty `owner_in` and `owner_not_in` lists both match no rows.
+When `owner` or `owner_in` is present, SQL starts from indexed
+effective-controller addresses and evaluates every other owner member against
+those same relation rows. Without either anchor, SQL visits candidate names in
+the requested ID order and performs an indexed effective-controller lookup for
+each name. That lookup is page-driven only while matching rows occur early
+enough in the requested direction to fill the page. A rare owner, or matches
+late in the requested direction, can walk the complete ordered names relation.
+Non-ID orders also have linear cost because the relation lookup runs before
+sorting. Issue `#831` owns index support for those linear cases. Omitted and
+explicit-null `owner` or `owner_in` are equivalent. Each of the 18 other owner
+members rejects explicit null as `Domain_filter.<member> must not be null`;
+empty `owner_in` and `owner_not_in` lists both match no rows.
 
 The effective controller agrees with `Domain.owner` when the latest projected
 registry-ownership event is an owner-bearing `AuthorityTransferred` to a non-zero
