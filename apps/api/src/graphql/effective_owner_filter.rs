@@ -26,30 +26,22 @@ pub(crate) fn domain_effective_owner_filter(filter: &DomainEntityFilter) -> Resu
         };
     }
     Ok(StringFilter {
-        eq: filter.owner.clone().map(|value| Some(value.to_lowercase())),
-        not: required_owner_value(filter.owner_not.clone(), "owner_not", |value| {
-            value.to_lowercase()
-        })?
+        eq: filter.owner.clone().map(Some),
+        not: required_owner_value(
+            filter.owner_not.clone(),
+            "owner_not",
+            std::convert::identity,
+        )?
         .map(Some),
         gt: value!(owner_gt),
         gte: value!(owner_gte),
         lt: value!(owner_lt),
         lte: value!(owner_lte),
-        in_values: filter.owner_in.clone().map(|values| {
-            values
-                .into_iter()
-                .map(|value| value.to_lowercase())
-                .collect()
-        }),
+        in_values: filter.owner_in.clone(),
         not_in_values: required_owner_value(
             filter.owner_not_in.clone(),
             "owner_not_in",
-            |values| {
-                values
-                    .into_iter()
-                    .map(|value| value.to_lowercase())
-                    .collect()
-            },
+            std::convert::identity,
         )?,
         contains: value!(owner_contains),
         contains_nocase: value!(owner_contains_nocase),
