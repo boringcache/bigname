@@ -1,5 +1,6 @@
 use anyhow::Result;
 use bigname_project::{BatchRequest, Engine, RunMode};
+use bigname_storage::load_children_current;
 use bigname_test_support::{TestDatabase, TestDatabaseConfig};
 use serde_json::{Value, json};
 use sqlx::{PgPool, raw_sql};
@@ -121,19 +122,7 @@ async fn insert_normalized_event(
 }
 
 async fn seed_parent_surface(pool: &PgPool) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO name_surfaces (
-             logical_name_id, namespace, raw_name, raw_labels, dns_encoded_name,
-             namehash, labelhashes, normalizer_version, visibility_state,
-             chain_id, block_hash, block_number, canonicality_state
-         ) VALUES (
-             $1, 'ens', 'parent.eth', ARRAY['parent', 'eth'], '\\x00', $2,
-             ARRAY[
-                 '0x1111111111111111111111111111111111111111111111111111111111111111',
-                 '0x2222222222222222222222222222222222222222222222222222222222222222'
-             ], 'ensip15', 'active', $3, $4, 10, 'canonical'
-         )",
-    )
+    sqlx::query("INSERT INTO name_surfaces (logical_name_id, namespace, raw_name, raw_labels, dns_encoded_name, namehash, labelhashes, normalizer_version, visibility_state, chain_id, block_hash, block_number, canonicality_state) VALUES ($1, 'ens', 'parent.eth', ARRAY['parent', 'eth'], '\\x00', $2, ARRAY['0x1111111111111111111111111111111111111111111111111111111111111111', '0x2222222222222222222222222222222222222222222222222222222222222222'], 'ensip15', 'active', $3, $4, 10, 'canonical')")
     .bind(PARENT)
     .bind(PARENT.trim_start_matches("ens:"))
     .bind(CHAIN)
@@ -144,20 +133,7 @@ async fn seed_parent_surface(pool: &PgPool) -> Result<()> {
 }
 
 async fn seed_v2_shadow_child(pool: &PgPool) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO name_surfaces (
-             logical_name_id, namespace, raw_name, raw_labels, dns_encoded_name,
-             namehash, labelhashes, normalizer_version, visibility_state,
-             chain_id, block_hash, block_number, canonicality_state
-         ) VALUES (
-             $1, 'ens', 'child.parent.eth', ARRAY['child', 'parent', 'eth'],
-             '\\x00', $2, ARRAY[
-                 $3,
-                 '0x1111111111111111111111111111111111111111111111111111111111111111',
-                 '0x2222222222222222222222222222222222222222222222222222222222222222'
-             ], 'ensip15', 'active', $4, $5, 10, 'canonical'
-         )",
-    )
+    sqlx::query("INSERT INTO name_surfaces (logical_name_id, namespace, raw_name, raw_labels, dns_encoded_name, namehash, labelhashes, normalizer_version, visibility_state, chain_id, block_hash, block_number, canonicality_state) VALUES ($1, 'ens', 'child.parent.eth', ARRAY['child', 'parent', 'eth'], '\\x00', $2, ARRAY[$3, '0x1111111111111111111111111111111111111111111111111111111111111111', '0x2222222222222222222222222222222222222222222222222222222222222222'], 'ensip15', 'active', $4, $5, 10, 'canonical')")
     .bind(V2_CHILD)
     .bind(V2_CHILD.trim_start_matches("ens:"))
     .bind(V2_LABELHASH)
@@ -179,27 +155,13 @@ async fn seed_v2_shadow_child(pool: &PgPool) -> Result<()> {
 }
 
 async fn seed_v2_registry_path(pool: &PgPool) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO resources (
-             resource_id, chain_id, block_hash, block_number, canonicality_state
-         ) VALUES ($1::uuid, $2, $3, 10, 'canonical')",
-    )
+    sqlx::query("INSERT INTO resources (resource_id, chain_id, block_hash, block_number, canonicality_state) VALUES ($1::uuid, $2, $3, 10, 'canonical')")
     .bind(V2_RESOURCE)
     .bind(CHAIN)
     .bind(block_hash(10))
     .execute(pool)
     .await?;
-    sqlx::query(
-        "INSERT INTO surface_bindings (
-             surface_binding_id, logical_name_id, resource_id, binding_kind,
-             authority_arm, active_from, chain_id, block_hash, block_number,
-             provenance, canonicality_state
-         ) VALUES (
-             $1::uuid, $2, $3::uuid, 'declared_registry_path', 'ens_v2',
-             to_timestamp(1700000000), $4, $5, 10,
-             '{\"transaction_index\":0,\"log_index\":0}', 'canonical'
-         )",
-    )
+    sqlx::query("INSERT INTO surface_bindings (surface_binding_id, logical_name_id, resource_id, binding_kind, authority_arm, active_from, chain_id, block_hash, block_number, provenance, canonicality_state) VALUES ($1::uuid, $2, $3::uuid, 'declared_registry_path', 'ens_v2', to_timestamp(1700000000), $4, $5, 10, '{\"transaction_index\":0,\"log_index\":0}', 'canonical')")
     .bind(V2_BINDING)
     .bind(V2_CHILD)
     .bind(V2_RESOURCE)
@@ -207,37 +169,19 @@ async fn seed_v2_registry_path(pool: &PgPool) -> Result<()> {
     .bind(block_hash(10))
     .execute(pool)
     .await?;
-    sqlx::query(
-        "INSERT INTO contract_instances (
-             contract_instance_id, chain_id, contract_kind
-         ) VALUES ($1::uuid, $2, 'contract')",
-    )
+    sqlx::query("INSERT INTO contract_instances (contract_instance_id, chain_id, contract_kind) VALUES ($1::uuid, $2, 'contract')")
     .bind(V2_REGISTRY)
     .bind(CHAIN)
     .execute(pool)
     .await?;
-    sqlx::query(
-        "INSERT INTO contract_instance_addresses (
-             contract_instance_id, chain_id, address, active_from_block_number,
-             active_from_block_hash
-         ) VALUES ($1::uuid, $2, $3, 10, $4)",
-    )
+    sqlx::query("INSERT INTO contract_instance_addresses (contract_instance_id, chain_id, address, active_from_block_number, active_from_block_hash) VALUES ($1::uuid, $2, $3, 10, $4)")
     .bind(V2_REGISTRY)
     .bind(CHAIN)
     .bind(V2_REGISTRY_ADDRESS)
     .bind(block_hash(10))
     .execute(pool)
     .await?;
-    sqlx::query(
-        "INSERT INTO discovery_edges (
-             chain_id, edge_kind, from_contract_instance_id, to_contract_instance_id,
-             discovery_source, admission_basis, active_from_block_number,
-             active_from_block_hash, canonicality_state, provenance
-         ) VALUES (
-             $1, 'registry_announcement', $2::uuid, $2::uuid, 'fixture', 'fixture',
-             10, $3, 'canonical', '{\"transaction_index\":0,\"log_index\":0}'
-         )",
-    )
+    sqlx::query("INSERT INTO discovery_edges (chain_id, edge_kind, from_contract_instance_id, to_contract_instance_id, discovery_source, admission_basis, active_from_block_number, active_from_block_hash, canonicality_state, provenance) VALUES ($1, 'registry_announcement', $2::uuid, $2::uuid, 'fixture', 'fixture', 10, $3, 'canonical', '{\"transaction_index\":0,\"log_index\":0}')")
     .bind(CHAIN)
     .bind(V2_REGISTRY)
     .bind(block_hash(10))
@@ -338,10 +282,12 @@ async fn projected_child(pool: &PgPool, child: &str) -> Result<Option<ProjectedC
 }
 
 // Contracts: docs/architecture.md "Name → children" and docs/projections.md
-// "Current projections" require the ENSv2 arm to join the child's active name surface.
+// "Address and child collections" require the [ENSv2 authority
+// arm](../../../docs/glossary.md#authority-epoch) to join the child's active
+// [name surface](../../../docs/glossary.md#surface-name-surface).
 #[tokio::test]
 async fn ens_v2_child_without_active_surface_is_absent() -> Result<()> {
-    let (_database, pool) = database("issue360_v2_shadow").await?;
+    let (database, pool) = database("issue360_v2_shadow").await?;
     seed_parent_surface(&pool).await?;
     seed_v2_shadow_child(&pool).await?;
     seed_v2_registry_path(&pool).await?;
@@ -352,14 +298,18 @@ async fn ens_v2_child_without_active_surface_is_absent() -> Result<()> {
         projected_child(&pool, V2_CHILD).await?.is_none(),
         "an ENSv2 registration must not publish a child whose staged surface is shadow"
     );
-    Ok(())
+    assert!(
+        load_children_current(&pool, PARENT).await?.is_empty(),
+        "storage must not serve an ENSv2 child absent from the projection"
+    );
+    database.cleanup().await
 }
 
 // Contracts: docs/architecture.md "Name → children" and docs/projections.md
-// "Current projections" retain the ENSv1 topology row while leaving unknown names null.
+// "Address and child collections" retain the ENSv1 topology row while leaving unknown names null.
 #[tokio::test]
 async fn ens_v1_topology_only_child_keeps_non_name_form() -> Result<()> {
-    let (_database, pool) = database("issue360_v1_hash_only").await?;
+    let (database, pool) = database("issue360_v1_hash_only").await?;
     seed_parent_surface(&pool).await?;
     seed_v1_topology_only_child(&pool).await?;
 
@@ -394,5 +344,32 @@ async fn ens_v1_topology_only_child_keeps_non_name_form() -> Result<()> {
         block_hash(10)
     );
     assert_eq!(child.manifest_version, 1);
-    Ok(())
+
+    // Contract: docs/api-v2-routes.md "GET /v2/names/{name}/subnames" requires
+    // the prefix-free lowercase labelhash placeholder in both served name fields.
+    let rows = load_children_current(&pool, PARENT).await?;
+    assert_eq!(rows.len(), 1, "storage must serve the one projected child");
+    let served = &rows[0];
+    let placeholder =
+        "[dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd].parent.eth";
+    assert_eq!(served.parent_logical_name_id, PARENT);
+    assert_eq!(served.child_logical_name_id, V1_CHILD);
+    assert_eq!(served.surface_class, "declared");
+    assert_eq!(served.namespace, "ens");
+    assert_eq!(served.canonical_display_name, placeholder);
+    assert_eq!(served.normalized_name, placeholder);
+    assert_eq!(served.namehash, V1_CHILD.trim_start_matches("ens:"));
+    assert_eq!(served.labelhash.as_deref(), Some(V1_LABELHASH));
+    assert_eq!(served.owner.as_deref(), Some(OWNER));
+    assert_eq!(served.registrant, None);
+    assert_eq!(served.provenance["chain_id"], CHAIN);
+    assert_eq!(served.chain_positions["target_block_number"], 10);
+    assert_eq!(served.chain_positions["target_block_hash"], block_hash(10));
+    assert_eq!(served.canonicality_summary["state"], "canonical");
+    assert_eq!(served.canonicality_summary["target_block_number"], 10);
+    assert_eq!(
+        served.canonicality_summary["target_block_hash"],
+        block_hash(10)
+    );
+    database.cleanup().await
 }
