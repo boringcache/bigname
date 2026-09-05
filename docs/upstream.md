@@ -252,7 +252,7 @@ to the applicable entries below.
 > **Why**: the effective-controller and served-owner projections intentionally answer different authority questions in
 > those classes, so the partial filter contract names the boundary instead of claiming universal field/filter equality.
 > **Planner evidence**: `pad_resolver_planner_statistics` inserts 5,000 `name_surfaces` and `name_current` rows; the owner plan fixture adds matching surface bindings and effective-controller rows plus two eligible sentinel names, distributed across owner populations of 4,797, 201, and six including the two base-fixture owners. It analyzes all seven participating tables.
-> These PostgreSQL 16 `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` values use ID ascending, limit 200, and 5,004 eligible Domain rows, with no JIT or temporary blocks. `outer` is the ordered outer-row count, `removed` its filter-removal count, and `anti blocks` the cumulative shared-buffer count of the anti subtree.
+> These PostgreSQL 16 `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` values use ID ascending unless labeled otherwise, limit 200, and 5,004 eligible Domain rows, with no JIT or temporary blocks. `outer` is the ordered outer-row count, `removed` its filter-removal count, and `anti blocks` the cumulative shared-buffer count of the anti subtree.
 >
 > | operator | total cost | outer | removed | max loops | relation index | anti blocks | full blocks |
 > | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: |
@@ -261,6 +261,7 @@ to the applicable entries below.
 > | `owner_gt` | 12,747.36 | 200 | 0 | 200 | `address_names_current_name_idx` | — | 6,214 |
 > | `owner_contains` | 12,747.36 | 200 | 0 | 200 | `address_names_current_name_idx` | — | 6,214 |
 > | `owner_contains_nocase` | 12,747.36 | 200 | 0 | 200 | `address_names_current_name_idx` | — | 6,211 |
+> | `owner_ends_with` rare, ID descending; 6 results | 12,747.36 | 5,006 | 0 | 5,006 | `address_names_current_name_idx` | — | 40,467 |
 > | `owner_not` | 19,285.98 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,001 | 6,782 |
 > | `owner_not_in` | 19,285.73 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,000 | 6,780 |
 > | `owner_not_contains` | 19,285.98 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,000 | 6,780 |

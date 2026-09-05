@@ -101,8 +101,8 @@ async fn graphql_generated_domain_owner_positive_plans_are_relation_bounded_or_l
             ).await?;
             assert!(returned.iter().any(|row| row.row.row.namehash == format!("0x{:064x}", 1_199)), "late second-owner target: {member}");
         } else {
-            assert!(nodes.iter().any(|node| node["Relation Name"] == "address_names_current"
-                && node["Actual Loops"].as_u64().unwrap_or(0) <= 204), "page-driven relation probe: {member}");
+            assert!(nodes.iter().any(|node| node["Index Name"] == "address_names_current_name_idx"
+                && node["Actual Loops"].as_u64().unwrap_or(0) <= 204), "page-driven indexed relation probe: {member}");
         }
     }
     database.cleanup().await
@@ -136,13 +136,56 @@ async fn graphql_generated_domain_owner_negative_plans_are_page_bounded_anti_joi
         let outer = nodes.iter().find(|node| node["Relation Name"] == "name_current" && node["Alias"] == "nc")
             .with_context(|| format!("ordered outer name_current scan: {member}"))?;
         assert!(outer["Actual Rows"].as_u64().unwrap_or(u64::MAX) <= 204, "{member}: {outer}");
-        assert!(outer["Rows Removed by Filter"].as_u64().unwrap_or(0) <= 4, "{member}: {outer}");
         let probe = nodes.iter().find(|node| node["Index Name"] == "address_names_current_name_idx")
             .with_context(|| format!("name-keyed anti probe: {member}"))?;
         assert!(probe["Actual Loops"].as_u64().unwrap_or(u64::MAX) <= 204, "{member}: {probe}");
         let returned = crate::graphql::load_phase_graphql_name_list_page_offset(&database.lookup_pool, &bigname_storage::NameCurrentListFilter { namespace: Some("ens".into()), ..Default::default() }, &chains, &filter, crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Asc, 200, 0).await?;
         assert!(returned.iter().any(|row| row.row.row.namehash == format!("0x{:064x}", 1_199)), "late second-owner target: {member}");
     }
+    database.cleanup().await
+}
+
+#[tokio::test]
+async fn graphql_generated_domain_owner_rare_pattern_plan_records_linear_direction_case() -> Result<()> {
+    let database = TestDatabase::new_migrated().await?;
+    seed_graphql_compat_fixture(&database).await?;
+    pad_generated_owner_plans(&database).await?;
+    let ordered_names: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bigname_phase.name_current WHERE namespace = 'ens' AND support_status = 'supported' AND chain_positions <> '{}'::JSONB").fetch_one(&database.lookup_pool).await?;
+    let filter = plan_domain_filter("owner_ends_with", "00a");
+    let explain = crate::graphql::explain_phase_graphql_name_list_page(
+        &database.lookup_pool, &["ethereum-mainnet".to_owned()], &filter,
+        crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Desc, 200, 0,
+    ).await?;
+    println!("OWNER RARE DESC PLAN {}", serde_json::to_string_pretty(&explain)?);
+    let plan = &explain[0]["Plan"];
+    assert_eq!(plan["Node Type"], "Limit");
+    assert_eq!(plan["Actual Rows"], 6, "rare owner population: {plan}");
+    let nodes = plan_nodes(&explain);
+    let outer = nodes.iter().find(|node| node["Relation Name"] == "name_current" && node["Alias"] == "nc").context("ordered outer name_current scan")?;
+    let probe = nodes.iter().find(|node| node["Index Name"] == "address_names_current_name_idx").context("name-keyed owner probe")?;
+    assert_eq!(outer["Actual Rows"].as_i64(), Some(ordered_names), "full ordered walk: {outer}");
+    assert_eq!(probe["Actual Loops"].as_i64(), Some(ordered_names), "linear owner probes: {probe}");
+    database.cleanup().await
+}
+
+#[tokio::test]
+async fn graphql_generated_domain_owner_negative_desc_plan_exercises_removal_bound() -> Result<()> {
+    let database = TestDatabase::new_migrated().await?;
+    seed_graphql_compat_fixture(&database).await?;
+    pad_generated_owner_plans(&database).await?;
+    let filter = plan_domain_filter("owner_not", GRAPHQL_OWNER);
+    let explain = crate::graphql::explain_phase_graphql_name_list_page(
+        &database.lookup_pool, &["ethereum-mainnet".to_owned()], &filter,
+        crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Desc, 200, 0,
+    ).await?;
+    println!("OWNER NEGATIVE DESC PLAN {}", serde_json::to_string_pretty(&explain)?);
+    assert_owner_plan_limits(&explain, "owner_not_desc")?;
+    let nodes = plan_nodes(&explain);
+    let outer = nodes.iter().find(|node| node["Relation Name"] == "name_current" && node["Alias"] == "nc").context("ordered outer name_current scan")?;
+    assert_eq!(outer["Actual Rows"], 208, "descending removal corpus: {outer}");
+    let rejected = nodes.iter().find(|node| node["Index Name"] == "address_names_current_name_idx" && node["Filter"].as_str().is_some_and(|filter| filter.contains(GRAPHQL_OWNER))).context("negative address rejection probe")?;
+    let removed = rejected["Rows Removed by Filter"].as_u64().unwrap_or(0);
+    assert!((1..=4).contains(&removed), "descending anti-probe removals: {rejected}");
     database.cleanup().await
 }
 
