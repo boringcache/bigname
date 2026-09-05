@@ -661,8 +661,10 @@ The generated effective-controller owner family is `owner`, `owner_not`,
 `owner_not_starts_with`, `owner_not_starts_with_nocase`, `owner_ends_with`,
 `owner_ends_with_nocase`, `owner_not_ends_with`, and
 `owner_not_ends_with_nocase`. Equality and membership compare supplied
-ID-shaped text exactly; range and pattern operands are bound unchanged, with
-`_nocase` retaining its case-insensitive meaning. Graph Node likewise forwards
+ID-shaped text exactly. Ranges retain the supplied text, and patterns retain its
+text and case while adding the wildcard prefix or suffix required by the
+operator; `_nocase` retains its case-insensitive meaning. Graph Node likewise
+forwards
 generated equality and list inputs directly into store filters (upstream:
 .refs/graph_node/graphql/src/store/query.rs:L156-L190 @ graph_node@aefe173).
 Every positive owner condition in one filter must match the same relation row.
