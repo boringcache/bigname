@@ -206,7 +206,7 @@ to the applicable entries below.
 > **Upstream**: the ENS subgraph defines `Domain.id` as the namehash
 > (upstream: .refs/ens_subgraph/schema.graphql:L1-L5 @ ens_subgraph@723f1b6), and Graph Node applies the supplied point ID
 > as an equality filter without a name fallback
-> (upstream: .refs/graph_node/graphql/src/store/prefetch.rs:L726-L730 @ graph_node@aefe1737).
+> (upstream: .refs/graph_node/graphql/src/store/prefetch.rs:L726-L730 @ graph_node@aefe173).
 > **Our rule**: `docs/consumer-capabilities.md` § GraphQL compatibility.
 > **Why**: the local extension preserves bigname's existing name-string lookup convenience while keeping generated
 > namehash IDs authoritative.
@@ -216,22 +216,20 @@ to the applicable entries below.
 > supplied ID text without normalization, while generated `Domain_filter.name` members compare the supplied text with the
 > nullable human-readable name instead of converting it to an ENS namehash.
 > **Upstream**: Graph Node maps an equality filter to direct entity-field equality
-> (upstream: .refs/graph_node/graphql/src/store/query.rs:L156-L190 @ graph_node@aefe1737), while the ENS subgraph declares
+> (upstream: .refs/graph_node/graphql/src/store/query.rs:L156-L190 @ graph_node@aefe173), while the ENS subgraph declares
 > the human-readable `Domain.name` separately from the namehash `Domain.id`
 > (upstream: .refs/ens_subgraph/schema.graphql:L1-L5 @ ens_subgraph@723f1b6).
 > **Our rule**: `docs/consumer-capabilities.md` § GraphQL compatibility. The separate legacy `DomainFilter` retains its ENS
 > name lookup and normalization behavior.
 > **Since**: `2026-09-03`
 
-> **Generated Domain owner filters depend on projected registry ownership** — the generated `Domain_filter` serves the 20-member `owner`, `owner_not`, `owner_gt`, `owner_gte`, `owner_lt`, `owner_lte`, `owner_in`, `owner_not_in`,
-> `owner_contains`, `owner_contains_nocase`, `owner_not_contains`, `owner_not_contains_nocase`, `owner_starts_with`, `owner_starts_with_nocase`, `owner_not_starts_with`, `owner_not_starts_with_nocase`, `owner_ends_with`, `owner_ends_with_nocase`, `owner_not_ends_with`, and `owner_not_ends_with_nocase` scalar family over bigname's effective-controller relation.
-> Positive members require a matching relation row. Negative members require an eligible relation witness and use a name-correlated anti-semijoin against the positive counterpart, so a name cannot pass merely because it has no effective-controller relation.
-> Filtered relation targets participate in snapshot revalidation.
-> `owner`, `owner_not`, `owner_in`, and `owner_not_in` lowercase address operands before binding; Graph Node routes supplied equality and list values directly into store filters (upstream: .refs/graph_node/graphql/src/store/query.rs:L156-L190 @ graph_node@aefe1737), so address normalization is a deliberate divergence.
-> Ranges and patterns compare supplied text directly. Explicit null for retained `owner` and `owner_in` remains equivalent to omission, while Graph Node emits `IS NULL` for null equality (upstream: .refs/graph_node/store/postgres/src/relational_queries.rs:L1603-L1623 @ graph_node@aefe1737); this deliberate divergence is filed as `#862`. Every newly served owner member rejects explicit null as `Domain_filter.<member> must not be null`. Empty
+> **Generated Domain owner filters depend on projected registry ownership** — the generated `Domain_filter` owner family compares the projected effective-controller relation rather than the served `Domain.owner` fallback.
+> Positive conditions in one filter must match the same relation row; each negative condition rejects the name when any eligible relation row matches its positive counterpart. Negative members require an eligible relation witness and use a name-correlated anti-semijoin, so a name cannot pass merely because the relation is absent. Filtered relation targets participate in snapshot revalidation.
+> Equality and membership compare supplied ID-shaped text exactly. Range and pattern operands are bound unchanged, with `_nocase` retaining its case-insensitive meaning. Graph Node routes supplied equality and list values directly into store filters (upstream: .refs/graph_node/graphql/src/store/query.rs:L156-L190 @ graph_node@aefe173).
+> Explicit null for retained `owner` and `owner_in` remains equivalent to omission, while Graph Node emits `IS NULL` for null equality (upstream: .refs/graph_node/store/postgres/src/relational_queries.rs:L1603-L1623 @ graph_node@aefe173); this deliberate divergence is filed as `#862`. Every newly served owner member rejects explicit null as `Domain_filter.<member> must not be null`. Empty
 > `owner_in` and `owner_not_in` lists both return an empty page, while duplicate list entries are tolerated. A bounded
 > positive equality or membership uses the relation-driven address-membership plan; an owner filter without that anchor
-> uses a page-driven name-correlated relation probe. The effective controller agrees with `Domain.owner`
+> uses a name-correlated relation probe. Under ID order or a bounded ID predicate it is page-driven only while matches occur early enough in the requested direction to fill the page; a rare owner or matches late in that direction walk the complete ordered names relation. Non-ID orders also run the probe before sorting and remain in the linear cost class owned by `#831`. The effective controller agrees with `Domain.owner`
 > when the latest projected registry-ownership event is an owner-bearing `AuthorityTransferred` to a non-zero address on
 > a non-wrapper-authority name and no later resource-scoped `PermissionChanged` event exists on the selected resource.
 > A zero registry owner is served as the zero address; a masked owner word is served as the registrant fallback, or the
@@ -250,7 +248,7 @@ to the applicable entries below.
 > ownership events (upstream: .refs/ens_subgraph/schema.graphql:L29-L32 @ ens_subgraph@723f1b6)
 > (upstream: .refs/ens_subgraph/src/ensRegistry.ts:L131-L138 @ ens_subgraph@723f1b6)
 > (upstream: .refs/ens_subgraph/src/ensRegistry.ts:L151-L158 @ ens_subgraph@723f1b6).
-> **Our rule**: this GraphQL section; task `#670/T5` owns the four residual classes.
+> **Our rule**: `docs/consumer-capabilities.md` § GraphQL compatibility; task `#670/T5` owns the four residual classes.
 > **Why**: the effective-controller and served-owner projections intentionally answer different authority questions in
 > those classes, so the partial filter contract names the boundary instead of claiming universal field/filter equality.
 > **Planner evidence**: `pad_resolver_planner_statistics` inserts 5,000 `name_surfaces` and `name_current` rows; the owner plan fixture adds matching surface bindings and effective-controller rows plus two eligible sentinel names, distributed across owner populations of 4,797, 201, and six including the two base-fixture owners. It analyzes all seven participating tables.
@@ -269,7 +267,7 @@ to the applicable entries below.
 > | `owner_not_contains_nocase` | 19,285.98 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,001 | 6,782 |
 > | `owner_not_starts_with` | 19,285.98 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,000 | 6,780 |
 > | `owner_not_ends_with` | 19,285.98 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,000 | 6,780 |
-> **Since**: `2026-09-02`
+> **Since**: `2026-09-05`
 
 > **Generated Domain patterns preserve SQL wildcards** — generated contains patterns are left unchanged when they start or
 > end with `%` and otherwise gain `%` at both ends. Generated pattern input does not perform ENSIP-15 substring
@@ -307,9 +305,9 @@ to the applicable entries below.
 > Bigname also adds a same-direction namehash tie-break to `owner__id`; Graph Node's child-ID path adds no parent-ID
 > tie-break. For a mutable entity such as `Domain`, the default setting appends the internal block-range column after
 > that child ID (upstream: .refs/ens_subgraph/schema.graphql:L1 @ ens_subgraph@723f1b6) (upstream:
-> .refs/graph_node/store/postgres/src/relational_queries.rs:L3838-L3842 @ graph_node@aefe1737) (upstream:
-> .refs/graph_node/store/postgres/src/relational_queries.rs:L4046-L4052 @ graph_node@aefe1737) (upstream:
-> .refs/graph_node/graph/src/env/store.rs:L299-L300 @ graph_node@aefe1737).
+> .refs/graph_node/store/postgres/src/relational_queries.rs:L3838-L3842 @ graph_node@aefe173) (upstream:
+> .refs/graph_node/store/postgres/src/relational_queries.rs:L4046-L4052 @ graph_node@aefe173) (upstream:
+> .refs/graph_node/graph/src/env/store.rs:L299-L300 @ graph_node@aefe173).
 > **Our rule**: `docs/consumer-capabilities.md` § GraphQL compatibility.
 > **Divergence**: bigname lacks equivalent raw-name and expression indexes for name equality/range/prefix and the non-ID
 > order keys. Issue `#831` owns those names-projection indexes. They require a separate schema-migration slice and are not
