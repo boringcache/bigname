@@ -1627,12 +1627,8 @@ async fn graphql_lists_and_counts_scope_rows_to_the_selected_snapshot_chains() -
                support_status, unsupported_reason,
                jsonb_set(provenance, '{chain_id}', '"ethereum-sepolia"'),
                jsonb_build_object(
-                   'ethereum-sepolia', jsonb_build_object(
-                       'chain_id', 'ethereum-sepolia',
-                       'block_number', 10940282,
-                       'block_hash', '0xother-chain',
-                       'timestamp', '2026-05-28T13:15:36Z'
-                   )
+                   'target_block_number', 10940282,
+                   'target_block_hash', '0xother-chain'
                ), canonicality_summary, manifest_version
         FROM bigname_phase.address_names_current
         WHERE logical_name_id = 'ens:' || $1
@@ -1644,6 +1640,20 @@ async fn graphql_lists_and_counts_scope_rows_to_the_selected_snapshot_chains() -
     .execute(&database.lookup_pool)
     .await?;
     assert_eq!(other_chain_relations.rows_affected(), 2);
+    let mut eligible = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "SELECT COUNT(*) FROM bigname_phase.address_names_current anc ",
+    );
+    eligible
+        .push(bigname_storage::DEFAULT_ADDRESS_NAMES_MEMBERSHIP_JOINS)
+        .push(" WHERE anc.address = ")
+        .push_bind(GRAPHQL_OTHER_CHAIN_HOLDER)
+        .push(" AND anc.relation = 'effective_controller'")
+        .push(bigname_storage::DEFAULT_ADDRESS_NAMES_MEMBERSHIP_READ_FILTER);
+    let eligible: i64 = eligible
+        .build_query_scalar()
+        .fetch_one(&database.lookup_pool)
+        .await?;
+    assert_eq!(eligible, 1, "cross-chain relation must pass baseline membership eligibility");
 
     let payload = post_graphql(
         database.app_state(),
