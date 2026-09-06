@@ -86,6 +86,17 @@ async fn graphql_generated_domain_owner_positive_plans_are_relation_bounded_or_l
         ).await?;
         println!("OWNER POSITIVE {member} PLAN {}", serde_json::to_string_pretty(&explain)?);
         assert_owner_plan_limits(&explain, member)?;
+        if matches!(member, "owner" | "owner_in" | "owner_contains") {
+            let prefix = crate::graphql::explain_phase_graphql_name_list_page(
+                &database.lookup_pool, &chains, &filter, crate::graphql::GeneratedDomainSort::Id,
+                bigname_storage::NameCurrentListOrder::Asc, 200, 200,
+            ).await?;
+            println!("OWNER PREFIX {member} PLAN {}", serde_json::to_string_pretty(&prefix)?);
+            let plan = &prefix[0]["Plan"];
+            assert_eq!(plan["Temp Written Blocks"], 0, "{member}: {plan}");
+            assert!(plan["Shared Hit Blocks"].as_u64().unwrap_or(0) + plan["Shared Read Blocks"].as_u64().unwrap_or(0) <= 8_192, "{member}: {plan}");
+            assert!(plan_nodes(&prefix).iter().all(|node| node["Actual Loops"].as_u64().unwrap_or(0) < 5_000), "{member}: {prefix}");
+        }
         let nodes = plan_nodes(&explain);
         if matches!(member, "owner" | "owner_in") {
             let scan = nodes.iter().find(|node| node["Index Name"].as_str()

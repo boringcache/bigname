@@ -2767,3 +2767,91 @@ async fn graphql_name_contains_accepts_label_boundary_fragments() -> Result<()> 
     database.cleanup().await?;
     Ok(())
 }
+
+async fn graphql_make_owner_target_future(database: &TestDatabase, namehash: &str) -> Result<()> {
+    let stamp_query = "SELECT jsonb_build_object('head', to_jsonb(head), 'phase', to_jsonb(phase), 'generation', phase.xmin::text)::text FROM bigname_phase.chain_heads head JOIN bigname_phase.chain_phase_state phase USING(chain_id) WHERE head.chain_id = 'ethereum-mainnet' AND phase.phase_name = 'project'";
+    let before: String = sqlx::query_scalar(stamp_query).fetch_one(&database.lookup_pool).await?;
+    // Stable inconsistent projection state, not an ordinary concurrent Project race:
+    // the request head and phase generation remain fixed while canonical future lineage exists.
+    sqlx::query("INSERT INTO bigname_phase.chain_lineage (chain_id, block_hash, parent_hash, block_number, block_timestamp, canonicality_state) SELECT chain_id, '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', latest_block_hash, 415, '2027-01-15T08:00:00Z', 'finalized' FROM bigname_phase.chain_heads WHERE chain_id = 'ethereum-mainnet' ON CONFLICT DO NOTHING")
+        .execute(&database.lookup_pool).await?;
+    let changed = sqlx::query("UPDATE bigname_phase.address_names_current SET chain_positions = jsonb_build_object('target_block_number', 415, 'target_block_hash', '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff') WHERE logical_name_id = 'ens:' || $1 AND relation = 'effective_controller' AND address = $2")
+        .bind(namehash).bind(GRAPHQL_OWNER).execute(&database.lookup_pool).await?;
+    assert_eq!(changed.rows_affected(), 1);
+    let after: String = sqlx::query_scalar(stamp_query).fetch_one(&database.lookup_pool).await?;
+    assert_eq!(before, after, "head and Project generation must stay fixed");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn graphql_owner_hidden_negative_witness_refuses() -> Result<()> {
+    let database = TestDatabase::new_migrated().await?;
+    seed_graphql_compat_fixture(&database).await?;
+    sqlx::query("INSERT INTO bigname_phase.address_names_current SELECT (jsonb_populate_record(NULL::bigname_phase.address_names_current, to_jsonb(anc) || jsonb_build_object('address', $1::text))).* FROM bigname_phase.address_names_current anc WHERE logical_name_id = 'ens:' || $2 AND relation = 'effective_controller'")
+        .bind(GRAPHQL_FALLBACK_HOLDER).bind(GRAPHQL_ALICE_NAMEHASH).execute(&database.lookup_pool).await?;
+    let query = "query($where: Domain_filter!) { domains(where: $where) { id } }";
+    let filters = [
+        json!({"id": GRAPHQL_ALICE_NAMEHASH, "owner_not": GRAPHQL_OWNER}),
+        json!({"id": GRAPHQL_ALICE_NAMEHASH, "owner_not_in": [GRAPHQL_OWNER]}),
+        json!({"id": GRAPHQL_ALICE_NAMEHASH, "owner_not_contains": "000a"}),
+        json!({"id": GRAPHQL_ALICE_NAMEHASH, "owner": GRAPHQL_FALLBACK_HOLDER, "owner_not": GRAPHQL_OWNER}),
+    ];
+    for filter in &filters {
+        let current = post_graphql(database.app_state(), query, json!({"where": filter})).await?;
+        assert_eq!(current["data"]["domains"], json!([]));
+    }
+    graphql_make_owner_target_future(&database, GRAPHQL_ALICE_NAMEHASH).await?;
+    let control = post_graphql_allow_errors(database.app_state(), query, json!({"where": {"id": GRAPHQL_ALICE_NAMEHASH, "owner": GRAPHQL_OWNER}})).await?;
+    assert!(control["errors"].as_array().is_some_and(|errors| !errors.is_empty()), "{control}");
+    let unrelated = post_graphql(database.app_state(), query, json!({"where": {
+        "id": GRAPHQL_ALICE_NAMEHASH, "owner": GRAPHQL_FALLBACK_HOLDER,
+        "owner_not": GRAPHQL_OTHER_CHAIN_HOLDER
+    }})).await?;
+    assert_eq!(unrelated["data"]["domains"], json!([{"id": GRAPHQL_ALICE_NAMEHASH}]),
+        "a nonmatching invalid sibling is not rejecting evidence");
+    let mut missing = Vec::new();
+    for filter in filters {
+        let response = post_graphql_allow_errors(database.app_state(), query, json!({"where": filter})).await?;
+        if !response["errors"].as_array().is_some_and(|errors| !errors.is_empty()) {
+            missing.push((filter, response));
+        }
+    }
+    assert!(missing.is_empty(), "negative witnesses escaped validation: {missing:?}");
+    database.cleanup().await
+}
+
+#[tokio::test]
+async fn graphql_owner_hidden_offset_witness_refuses() -> Result<()> {
+    let database = TestDatabase::new_migrated().await?;
+    seed_graphql_compat_fixture(&database).await?;
+    let query = "query($where: Domain_filter!, $skip: Int!, $first: Int!) { domains(where: $where, orderBy: id, orderDirection: asc, skip: $skip, first: $first) { id } }";
+    let filters = [
+        json!({"owner_contains": "0x"}),
+        json!({"owner": GRAPHQL_OWNER}),
+        json!({"owner_in": [GRAPHQL_OWNER]}),
+    ];
+    // Bound the unanchored pattern to the same two-name candidate set.
+    let filters = filters.map(|mut filter| {
+        filter["id_in"] = json!([GRAPHQL_ALICE_NAMEHASH, GRAPHQL_BOB_NAMEHASH]);
+        filter
+    });
+    for filter in &filters {
+        let current = post_graphql(database.app_state(), query, json!({"where": filter, "skip": 0, "first": 2})).await?;
+        assert_eq!(current["data"]["domains"], json!([{"id": GRAPHQL_ALICE_NAMEHASH}, {"id": GRAPHQL_BOB_NAMEHASH}]));
+        let page = post_graphql(database.app_state(), query, json!({"where": filter, "skip": 1, "first": 1})).await?;
+        assert_eq!(page["data"]["domains"], json!([{"id": GRAPHQL_BOB_NAMEHASH}]));
+    }
+    graphql_make_owner_target_future(&database, GRAPHQL_ALICE_NAMEHASH).await?;
+    let mut missing = Vec::new();
+    for filter in filters {
+        let control = post_graphql_allow_errors(database.app_state(), query, json!({"where": filter, "skip": 0, "first": 1})).await?;
+        assert!(control["errors"].as_array().is_some_and(|errors| !errors.is_empty()), "{control}");
+        let page = post_graphql_allow_errors(database.app_state(), query, json!({"where": filter, "skip": 1, "first": 1})).await?;
+        if !page["errors"].as_array().is_some_and(|errors| !errors.is_empty()) {
+            missing.push((filter, page));
+        }
+    }
+    assert!(missing.is_empty(), "skipped witnesses escaped validation: {missing:?}");
+    database.cleanup().await
+}

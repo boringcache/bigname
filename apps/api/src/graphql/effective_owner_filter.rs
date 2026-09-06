@@ -100,11 +100,13 @@ pub(crate) fn push_effective_owner_cte_predicates<'a>(
 ) {
     let Some(filter) = filter else { return };
     builder.push(
-        "eligible_effective_owner AS NOT MATERIALIZED (\
-         SELECT anc.logical_name_id, anc.address, anc.relation, \
-                anc.chain_positions, anc.provenance \
-         FROM bigname_phase.address_names_current anc ",
+        "eligible_effective_owner AS NOT MATERIALIZED (SELECT anc.logical_name_id, \
+         anc.address, anc.relation, anc.chain_positions, anc.provenance, ",
     );
+    push_rejection_match(builder, filter);
+    builder.push(" AS rejects_filter, ");
+    builder.push(super::name_queries::owner_witness_validation::OWNER_TARGET_AT_HEAD);
+    builder.push(" AS at_head FROM bigname_phase.address_names_current anc ");
     builder.push(DEFAULT_ADDRESS_NAMES_MEMBERSHIP_JOINS);
     builder.push(
         " WHERE anc.support_status = 'supported' \
@@ -142,6 +144,17 @@ pub(crate) fn push_effective_owner_membership_targets(
     } else {
         " '[]'::JSONB AS membership_targets"
     });
+    if filter.is_some_and(has_negative) {
+        builder.push(
+            " || COALESCE((SELECT JSONB_AGG( \
+                 rejected_owner.chain_positions || JSONB_BUILD_OBJECT( \
+                   'chain_id', rejected_owner.provenance ->> 'chain_id')) \
+               FROM eligible_effective_owner rejected_owner \
+               WHERE rejected_owner.logical_name_id = nc.logical_name_id \
+                 AND rejected_owner.rejects_filter AND NOT rejected_owner.at_head \
+             ), '[]'::JSONB) AS membership_targets",
+        );
+    }
 }
 
 pub(crate) fn push_effective_owner_lateral_join<'a>(
@@ -173,14 +186,6 @@ fn push_owner_predicates<'a>(builder: &mut QueryBuilder<'a, Postgres>, filter: &
             }
         }
     }
-    if let Some(value) = filter.not.as_ref() {
-        match value {
-            Some(value) => push_negative(builder, "rejected_owner.address", " = ", value),
-            None => {
-                builder.push(" AND FALSE");
-            }
-        }
-    }
     for (value, operator) in [
         (filter.gt.as_ref(), " > "),
         (filter.gte.as_ref(), " >= "),
@@ -196,41 +201,43 @@ fn push_owner_predicates<'a>(builder: &mut QueryBuilder<'a, Postgres>, filter: &
             );
         }
     }
-    push_membership(builder, filter.in_values.as_deref(), false);
-    push_membership(builder, filter.not_in_values.as_deref(), true);
+    push_membership(builder, filter.in_values.as_deref());
+
     macro_rules! patterns {
-        ($( $member:ident => ($nocase:literal, $negative:literal, $kind:ident) ),+ $(,)?) => {
+        ($( $member:ident => ($nocase:literal, $kind:ident) ),+ $(,)?) => {
             $(if let Some(value) = filter.$member.as_deref() {
-                push_pattern(builder, Pattern::$kind.apply(value), $nocase, $negative);
+                push_pattern(builder, Pattern::$kind.apply(value), $nocase);
             })+
         };
     }
     patterns! {
-        contains => (false, false, Contains),
-        contains_nocase => (true, false, Contains),
-        not_contains => (false, true, Contains),
-        not_contains_nocase => (true, true, Contains),
-        starts_with => (false, false, Starts),
-        starts_with_nocase => (true, false, Starts),
-        not_starts_with => (false, true, Starts),
-        not_starts_with_nocase => (true, true, Starts),
-        ends_with => (false, false, Ends),
-        ends_with_nocase => (true, false, Ends),
-        not_ends_with => (false, true, Ends),
-        not_ends_with_nocase => (true, true, Ends),
+        contains => (false, Contains),
+        contains_nocase => (true, Contains),
+        starts_with => (false, Starts),
+        starts_with_nocase => (true, Starts),
+        ends_with => (false, Ends),
+        ends_with_nocase => (true, Ends),
+    }
+    if filter.not == Some(None) || filter.not_in_values.as_ref().is_some_and(Vec::is_empty) {
+        builder.push(" AND FALSE");
+    } else if has_negative(filter) {
+        // A rejecting future target must reach Rust validation, even when another
+        // current controller satisfies the positive predicates.
+        builder.push(
+            " AND NOT EXISTS (SELECT 1 FROM eligible_effective_owner rejected_owner \
+                 WHERE rejected_owner.logical_name_id = owner_witness.logical_name_id \
+                   AND rejected_owner.rejects_filter \
+               AND NOT EXISTS (SELECT 1 FROM eligible_effective_owner invalid_owner \
+                 WHERE invalid_owner.logical_name_id = owner_witness.logical_name_id \
+                   AND invalid_owner.rejects_filter AND NOT invalid_owner.at_head))",
+        );
     }
 }
 
-fn push_membership<'a>(
-    builder: &mut QueryBuilder<'a, Postgres>,
-    values: Option<&'a [String]>,
-    negative: bool,
-) {
+fn push_membership<'a>(builder: &mut QueryBuilder<'a, Postgres>, values: Option<&'a [String]>) {
     let Some(values) = values else { return };
     if values.is_empty() {
         builder.push(" AND FALSE");
-    } else if negative {
-        push_negative_list(builder, values);
     } else {
         builder
             .push(" AND owner_witness.address = ANY(")
@@ -252,57 +259,12 @@ fn push_scalar<'a>(
         .push_bind(value);
 }
 
-fn push_negative<'a>(
-    builder: &mut QueryBuilder<'a, Postgres>,
-    column: &str,
-    operator: &str,
-    value: &'a String,
-) {
-    builder
-        .push(
-            " AND NOT EXISTS (SELECT 1 FROM eligible_effective_owner rejected_owner \
-               WHERE rejected_owner.logical_name_id = owner_witness.logical_name_id AND ",
-        )
-        .push(column)
-        .push(operator)
-        .push_bind(value)
-        .push(")");
-}
-
-fn push_negative_list<'a>(builder: &mut QueryBuilder<'a, Postgres>, values: &'a [String]) {
-    builder
-        .push(
-            " AND NOT EXISTS (SELECT 1 FROM eligible_effective_owner rejected_owner \
-               WHERE rejected_owner.logical_name_id = owner_witness.logical_name_id \
-                 AND rejected_owner.address = ANY(",
-        )
-        .push_bind(values)
-        .push("::text[]))");
-}
-
-fn push_pattern<'a>(
-    builder: &mut QueryBuilder<'a, Postgres>,
-    pattern: String,
-    nocase: bool,
-    negative: bool,
-) {
+fn push_pattern<'a>(builder: &mut QueryBuilder<'a, Postgres>, pattern: String, nocase: bool) {
     let operator = if nocase { " ILIKE " } else { " LIKE " };
-    if negative {
-        builder
-            .push(
-                " AND NOT EXISTS (SELECT 1 FROM eligible_effective_owner rejected_owner \
-                   WHERE rejected_owner.logical_name_id = owner_witness.logical_name_id \
-                     AND (rejected_owner.address COLLATE \"C\")",
-            )
-            .push(operator)
-            .push_bind(pattern)
-            .push(")");
-    } else {
-        builder
-            .push(" AND (owner_witness.address COLLATE \"C\")")
-            .push(operator)
-            .push_bind(pattern);
-    }
+    builder
+        .push(" AND (owner_witness.address COLLATE \"C\")")
+        .push(operator)
+        .push_bind(pattern);
 }
 
 #[derive(Clone, Copy)]
@@ -321,4 +283,48 @@ impl Pattern {
             Self::Ends => format!("%{value}"),
         }
     }
+}
+
+fn has_negative(filter: &StringFilter) -> bool {
+    filter.not.is_some()
+        || filter.not_in_values.is_some()
+        || filter.not_contains.is_some()
+        || filter.not_contains_nocase.is_some()
+        || filter.not_starts_with.is_some()
+        || filter.not_starts_with_nocase.is_some()
+        || filter.not_ends_with.is_some()
+        || filter.not_ends_with_nocase.is_some()
+}
+
+fn push_rejection_match<'a>(builder: &mut QueryBuilder<'a, Postgres>, filter: &'a StringFilter) {
+    builder.push("(FALSE");
+    if let Some(Some(value)) = &filter.not {
+        builder.push(" OR anc.address = ").push_bind(value);
+    }
+    if let Some(values) = &filter.not_in_values {
+        builder
+            .push(" OR anc.address = ANY(")
+            .push_bind(values)
+            .push("::text[])");
+    }
+    for (value, nocase, kind) in [
+        (filter.not_contains.as_ref(), false, Pattern::Contains),
+        (filter.not_contains_nocase.as_ref(), true, Pattern::Contains),
+        (filter.not_starts_with.as_ref(), false, Pattern::Starts),
+        (
+            filter.not_starts_with_nocase.as_ref(),
+            true,
+            Pattern::Starts,
+        ),
+        (filter.not_ends_with.as_ref(), false, Pattern::Ends),
+        (filter.not_ends_with_nocase.as_ref(), true, Pattern::Ends),
+    ] {
+        if let Some(value) = value {
+            builder
+                .push(" OR (anc.address COLLATE \"C\")")
+                .push(if nocase { " ILIKE " } else { " LIKE " })
+                .push_bind(kind.apply(value));
+        }
+    }
+    builder.push(")");
 }

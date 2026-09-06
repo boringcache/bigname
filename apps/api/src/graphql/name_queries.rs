@@ -95,73 +95,11 @@ async fn load_one(
     row.map(decode_row).transpose()
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn load_phase_graphql_name_list_page_offset(
-    pool: &PgPool,
-    filter: &NameCurrentListFilter,
-    snapshot_chain_ids: &[String],
-    generated_filter: &GeneratedDomainFilter,
-    sort: GeneratedDomainSort,
-    order: NameCurrentListOrder,
-    limit: u64,
-    offset: u64,
-) -> Result<Vec<PhaseGraphqlNameListRow>> {
-    let limit = i64::try_from(limit).context("GraphQL name limit exceeds SQL limit")?;
-    let offset = i64::try_from(offset).context("GraphQL name offset exceeds SQL limit")?;
-    let mut builder = QueryBuilder::<Postgres>::new("");
-    push_filtered_names(
-        &mut builder,
-        filter,
-        None,
-        Some(generated_filter),
-        Some(snapshot_chain_ids),
-        indexed_page(sort, generated_filter),
-    );
-    builder.push(SELECT_NAMES);
-    push_order(&mut builder, sort, order);
-    builder.push(" LIMIT ");
-    builder.push_bind(limit);
-    builder.push(" OFFSET ");
-    builder.push_bind(offset);
-    let rows = builder
-        .build()
-        .fetch_all(pool)
-        .await
-        .with_context(|| format!("failed to load schema-v2 GraphQL names for {filter:?}"))?;
-    rows.into_iter().map(decode_row).collect()
-}
-
+#[path = "owner_witness_validation.rs"]
+pub(super) mod owner_witness_validation;
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub async fn explain_phase_graphql_name_list_page(
-    pool: &PgPool,
-    snapshot_chain_ids: &[String],
-    filter: &GeneratedDomainFilter,
-    sort: GeneratedDomainSort,
-    order: NameCurrentListOrder,
-    limit: u64,
-    offset: u64,
-) -> Result<Value> {
-    let storage_filter = NameCurrentListFilter {
-        namespace: Some("ens".into()),
-        ..Default::default()
-    };
-    let mut builder = QueryBuilder::<Postgres>::new("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ");
-    push_filtered_names(
-        &mut builder,
-        &storage_filter,
-        None,
-        Some(filter),
-        Some(snapshot_chain_ids),
-        indexed_page(sort, filter),
-    );
-    builder.push(SELECT_NAMES);
-    push_order(&mut builder, sort, order);
-    builder.push(" LIMIT ").push_bind(i64::try_from(limit)?);
-    builder.push(" OFFSET ").push_bind(i64::try_from(offset)?);
-    let row = builder.build().fetch_one(pool).await?;
-    Ok(row.try_get(0)?)
-}
+pub use owner_witness_validation::explain_phase_graphql_name_list_page;
+pub use owner_witness_validation::load_phase_graphql_name_list_page_offset;
 
 fn indexed_page(sort: GeneratedDomainSort, filter: &GeneratedDomainFilter) -> bool {
     sort == GeneratedDomainSort::Id || filter.has_bounded_id_predicate()
