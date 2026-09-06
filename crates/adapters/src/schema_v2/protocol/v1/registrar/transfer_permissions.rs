@@ -12,7 +12,10 @@ pub(super) fn append_transfer_permissions(
     let Some(to) = after.owner.as_deref() else {
         return;
     };
-    if from.eq_ignore_ascii_case(to) {
+    if from.eq_ignore_ascii_case(to)
+        && previous_authority.map(|authority| authority.resource_id)
+            == current_authority.map(|authority| authority.resource_id)
+    {
         return;
     }
     for (grant, subject, action) in [(false, from, "revoke"), (true, to, "grant")] {

@@ -2179,3 +2179,162 @@ fn ownerless_renewal_refreshes_already_current_registrar_state() -> anyhow::Resu
     }
     Ok(())
 }
+
+#[test]
+fn admitted_registrar_self_transfer_reconciles_authority_permissions() -> anyhow::Result<()> {
+    // Exercise a first retained label-bearing renewal using deployed controller/registrar
+    // admissions, never a controller event attributed to the ERC721 emitter.
+    // (upstream: .refs/ens_v1/deployments/archive/ETHRegistrarController_mainnet_9380471.sol/ETHRegistrarController_mainnet_9380471.json:L72-L98 @ ens_v1@91c966f)
+    // (upstream: .refs/ens_v1/contracts/ethregistrar/BaseRegistrarImplementation.sol:L157-L168 @ ens_v1@91c966f)
+    let (mut manifests, mut admissions, node) = fixture();
+    let repository = bigname_manifests::load_repository(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/mainnet/ethereum"),
+    )?;
+    let deployed = &repository
+        .manifests()
+        .iter()
+        .find(|loaded| loaded.relative_path.to_string_lossy() == "ens/ens_v1_registrar_l1/v1.toml")
+        .expect("Mainnet registrar manifest")
+        .manifest;
+    manifests[1].payload_json = serde_json::to_string(deployed)?;
+    admissions.retain(|entry| entry.source_manifest_id != Some(REGISTRAR_MANIFEST_ID));
+    for (index, contract) in deployed.contracts.iter().enumerate() {
+        let mut entry = admission(REGISTRAR_MANIFEST_ID, &contract.role);
+        entry.address = contract.address.clone();
+        entry.contract_instance_id = Uuid::from_u128(70_000 + index as u128);
+        entry.active_from_block = contract.start_block.map(|block| block as i64);
+        admissions.push(entry);
+    }
+    let emitter = |role: &str| {
+        deployed
+            .contracts
+            .iter()
+            .find(|contract| contract.role == role)
+            .unwrap()
+            .address
+            .clone()
+    };
+    let mut renewal = raw_at(
+        wrapped_controller::NameRenewed {
+            name: "pointer".to_owned(),
+            label: keccak256(b"pointer"),
+            cost: U256::from(1),
+            expires: U256::from(2_000_000_000u64),
+        }
+        .encode_log_data(),
+        10_000_002,
+        1,
+        &emitter("legacy_registrar_controller"),
+    );
+    renewal.block_timestamp =
+        (std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000)).into();
+    mod numeric_renewal {
+        use super::*;
+        sol! { event NameRenewed(uint256 indexed id, uint256 expires); }
+    }
+    let mut numeric = raw_at(
+        numeric_renewal::NameRenewed {
+            id: U256::from_be_slice(keccak256(b"pointer").as_slice()),
+            expires: U256::from(2_000_000_000u64),
+        }
+        .encode_log_data(),
+        10_000_002,
+        0,
+        &emitter("registrar"),
+    );
+    numeric.block_timestamp = renewal.block_timestamp;
+    let prefix = vec![
+        current_new_owner(OWNER, 10_000_000)?,
+        resolver_selection(REGISTRY, node, RESOLVER_A, 10_000_001)?,
+        numeric,
+        renewal,
+    ];
+    let mut suffix = registrar_transfer(OWNER, OWNER, 10_000_003)?;
+    suffix.emitting_address = emitter("registrar");
+    suffix.block_timestamp =
+        (std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_001)).into();
+    let (before, session) = interpret_test_batch_incremental(
+        input(
+            manifests.clone(),
+            admissions.clone(),
+            vec![],
+            prefix.clone(),
+        ),
+        None,
+    )?;
+    let (live, session) = interpret_test_batch_incremental(
+        input(
+            manifests.clone(),
+            admissions.clone(),
+            vec![],
+            vec![suffix.clone()],
+        ),
+        Some(session),
+    )?;
+    for prior in [
+        before.normalized_events.iter().map(prior_event).collect(),
+        compact_prior(&before.normalized_events),
+    ] {
+        let (cold, _) = interpret_test_batch_incremental(
+            input(
+                manifests.clone(),
+                admissions.clone(),
+                prior,
+                vec![suffix.clone()],
+            ),
+            None,
+        )?;
+        assert_eq!(live, cold, "self-transfer authority restore drift");
+    }
+    let old_resource = before
+        .normalized_events
+        .iter()
+        .find(|event| event.event_kind == "AuthorityTransferred")
+        .unwrap()
+        .resource_id;
+    let selected_resource = live
+        .normalized_events
+        .iter()
+        .find(|event| event.event_kind == "AuthorityEpochChanged")
+        .expect("registrar activation")
+        .resource_id;
+    assert_ne!(old_resource, selected_resource);
+    let permissions: Vec<_> = live
+        .normalized_events
+        .iter()
+        .filter(|event| event.event_kind == "PermissionChanged")
+        .collect();
+    for (resource, grant) in [(old_resource, false), (selected_resource, true)] {
+        for kind in ["resource", "resolver"] {
+            assert!(
+                permissions.iter().any(|event| event.resource_id == resource
+                    && event.after_state["scope"]["kind"] == kind
+                    && event.after_state["subject"] == OWNER
+                    && (kind != "resolver"
+                        || event.after_state["scope"]["resolver_address"] == RESOLVER_A)
+                    && event.after_state["effective_powers"]
+                        == if grant {
+                            json!([format!("{kind}_control")])
+                        } else {
+                            json!([])
+                        }),
+                "missing {kind} permission grant={grant} on {resource:?}"
+            );
+        }
+    }
+    let mut repeated = registrar_transfer(OWNER, OWNER, 10_000_004)?;
+    repeated.emitting_address = emitter("registrar");
+    repeated.block_timestamp =
+        (std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_002)).into();
+    let (unchanged, _) = interpret_test_batch_incremental(
+        input(manifests, admissions, vec![], vec![repeated]),
+        Some(session),
+    )?;
+    assert!(
+        !unchanged
+            .normalized_events
+            .iter()
+            .any(|event| event.event_kind == "PermissionChanged")
+    );
+    Ok(())
+}
