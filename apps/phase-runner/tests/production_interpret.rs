@@ -1903,7 +1903,129 @@ async fn current_registry_handoff_retracts_surfaced_old_resolver_after_redo_and_
     );
     assert_eq!(projected.1.as_deref(), Some("unregistered"));
     assert_eq!(projected.2.as_deref(), Some("unregistered"));
+    assert_handoff_product_history(scratch.pool(), &clears).await?;
     scratch.cleanup().await
+}
+
+async fn assert_handoff_product_history(
+    pool: &PgPool,
+    clears: &[(String, String, bool, Uuid)],
+) -> Result<()> {
+    use bigname_storage::{
+        EventHistoryFilter, HistoryScope, HistorySummaryMode, load_event_history_page,
+        load_name_history, load_resource_history,
+    };
+    let logical_name: String = sqlx::query_scalar(
+        "SELECT logical_name_id FROM name_current WHERE raw_name = 'pointer.eth'",
+    )
+    .fetch_one(pool)
+    .await?;
+    let filter = EventHistoryFilter {
+        logical_name_id: Some(logical_name.clone()),
+        event_kinds: vec!["ResolverChanged".into()],
+        from_block: Some(4),
+        to_block: Some(4),
+        ..Default::default()
+    };
+    let page = load_event_history_page(
+        pool,
+        filter.clone(),
+        true,
+        None,
+        10,
+        HistorySummaryMode::Full,
+        false,
+    )
+    .await?;
+    assert_eq!(
+        page.summary.as_ref().unwrap().total_count,
+        2,
+        "resource copies of one handoff must appear once in product history"
+    );
+    assert_eq!(page.rows.len(), 2);
+    assert!(page.next_cursor.is_none());
+    let diagnostic = load_event_history_page(
+        pool,
+        filter.clone(),
+        true,
+        None,
+        10,
+        HistorySummaryMode::None,
+        true,
+    )
+    .await?;
+    assert_eq!(
+        diagnostic.rows.len(),
+        clears.len() + 1,
+        "retain every diagnostic resource copy"
+    );
+    let name_rows =
+        load_name_history(pool, &logical_name, &[], HistoryScope::Surface, true).await?;
+    assert_eq!(
+        name_rows
+            .iter()
+            .filter(|event| event.after_state["registry_fallback_handoff"] == true)
+            .count(),
+        1
+    );
+    for clear in clears {
+        let rows = load_resource_history(pool, clear.3, &[], HistoryScope::Resource, true).await?;
+        assert_eq!(
+            rows.iter()
+                .filter(|event| event.after_state["registry_fallback_handoff"] == true)
+                .count(),
+            1,
+            "each resource keeps its sole matching clear"
+        );
+    }
+    let all = EventHistoryFilter {
+        from_block: None,
+        to_block: None,
+        ..filter
+    };
+    let first = load_event_history_page(
+        pool,
+        all.clone(),
+        true,
+        None,
+        1,
+        HistorySummaryMode::Count,
+        false,
+    )
+    .await?;
+    let cursor = first
+        .next_cursor
+        .as_ref()
+        .expect("an earlier resolver event remains");
+    let rest = load_event_history_page(
+        pool,
+        all,
+        true,
+        Some(cursor),
+        100,
+        HistorySummaryMode::Full,
+        false,
+    )
+    .await?;
+    assert_eq!(
+        first.rows.len() + rest.rows.len(),
+        rest.summary.as_ref().unwrap().total_count as usize
+    );
+    assert!(
+        rest.rows
+            .iter()
+            .all(|event| event.event_identity != first.rows[0].event_identity)
+    );
+    assert_eq!(
+        first
+            .rows
+            .iter()
+            .chain(&rest.rows)
+            .filter(|event| event.after_state["registry_fallback_handoff"] == true)
+            .count(),
+        1
+    );
+    Ok(())
 }
 
 #[tokio::test]
