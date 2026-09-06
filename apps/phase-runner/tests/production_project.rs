@@ -19774,6 +19774,8 @@ async fn sepolia_profile_blocks_the_same_proven_dual_current_corpus() -> Result<
             mode: InterpretRunMode::Normal,
         })
         .await?;
+    // Construct this proof row as a pre-Project fixture.
+    // Connected activation is exercised by the #852 e2e scenarios.
     insert_activated_authority_proof(
         scratch.pool(),
         chain,
