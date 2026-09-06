@@ -2855,3 +2855,50 @@ async fn graphql_owner_hidden_offset_witness_refuses() -> Result<()> {
     assert!(missing.is_empty(), "skipped witnesses escaped validation: {missing:?}");
     database.cleanup().await
 }
+
+#[tokio::test]
+async fn graphql_owner_hidden_offset_name_target_refuses() -> Result<()> {
+    let database = TestDatabase::new_migrated().await?;
+    seed_graphql_compat_fixture(&database).await?;
+    let query = "query($where: Domain_filter!, $skip: Int!) { domains(where: $where, orderBy: id, orderDirection: asc, skip: $skip, first: 1) { id } }";
+    let filters = [json!({"owner": GRAPHQL_OWNER}), json!({"owner_contains": "0x"})]
+        .map(|mut filter| {
+            filter["id_in"] = json!([GRAPHQL_ALICE_NAMEHASH, GRAPHQL_BOB_NAMEHASH]);
+            filter
+        });
+    let stamp_query = "SELECT jsonb_build_object('head', to_jsonb(head), 'phase', to_jsonb(phase), 'generation', phase.xmin::text)::text FROM bigname_phase.chain_heads head JOIN bigname_phase.chain_phase_state phase USING(chain_id) WHERE head.chain_id = 'ethereum-mainnet' AND phase.phase_name = 'project'";
+    let stamp: String = sqlx::query_scalar(stamp_query).fetch_one(&database.lookup_pool).await?;
+    let original: Value = sqlx::query_scalar("SELECT chain_positions FROM bigname_phase.name_current WHERE namehash = $1")
+        .bind(GRAPHQL_ALICE_NAMEHASH).fetch_one(&database.lookup_pool).await?;
+    let witness_query = "SELECT chain_positions FROM bigname_phase.address_names_current WHERE namehash = $1 AND relation = 'effective_controller' AND address = $2";
+    let witness: Value = sqlx::query_scalar(witness_query).bind(GRAPHQL_ALICE_NAMEHASH).bind(GRAPHQL_OWNER).fetch_one(&database.lookup_pool).await?;
+    for filter in &filters {
+        for (skip, expected) in [(0, GRAPHQL_ALICE_NAMEHASH), (1, GRAPHQL_BOB_NAMEHASH)] {
+            let response = post_graphql(database.app_state(), query, json!({"where": filter, "skip": skip})).await?;
+            assert_eq!(response["data"]["domains"], json!([{"id": expected}]));
+        }
+    }
+    // Refusal of stable inconsistent projection state; ordinary Project publication
+    // rebuilds the name and controller together. Keep its head/generation fixed here.
+    sqlx::query("INSERT INTO bigname_phase.chain_lineage (chain_id, block_hash, parent_hash, block_number, block_timestamp, canonicality_state) SELECT chain_id, '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', latest_block_hash, latest_block_number + 1, '2027-01-15T08:00:00Z', 'finalized' FROM bigname_phase.chain_heads WHERE chain_id = 'ethereum-mainnet' ON CONFLICT DO NOTHING")
+        .execute(&database.lookup_pool).await?;
+    let mut missing = Vec::new();
+    for future in [true, false] {
+        let changed = sqlx::query("UPDATE bigname_phase.name_current SET chain_positions = (SELECT jsonb_object_agg(position.key, position.value || jsonb_build_object('block_number', head.latest_block_number + $2, 'block_hash', '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')) FROM jsonb_each($3::jsonb) position CROSS JOIN bigname_phase.chain_heads head WHERE head.chain_id = 'ethereum-mainnet') WHERE namehash = $1")
+            .bind(GRAPHQL_ALICE_NAMEHASH).bind(i64::from(future)).bind(&original).execute(&database.lookup_pool).await?;
+        assert_eq!(changed.rows_affected(), 1);
+        for filter in &filters {
+            for skip in [0, 1] {
+                let response = post_graphql_allow_errors(database.app_state(), query, json!({"where": filter, "skip": skip})).await?;
+                if response["errors"].as_array().is_none_or(|errors| errors.is_empty()) {
+                    missing.push((future, filter.clone(), skip, response));
+                }
+            }
+        }
+        assert_eq!(stamp, sqlx::query_scalar::<_, String>(stamp_query).fetch_one(&database.lookup_pool).await?);
+        assert_eq!(witness, sqlx::query_scalar::<_, Value>(witness_query).bind(GRAPHQL_ALICE_NAMEHASH).bind(GRAPHQL_OWNER).fetch_one(&database.lookup_pool).await?);
+    }
+    database.cleanup().await?;
+    assert!(missing.is_empty(), "name targets escaped validation: {missing:?}");
+    Ok(())
+}

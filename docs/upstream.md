@@ -249,23 +249,41 @@ to the applicable entries below.
 > **Our rule**: `docs/consumer-capabilities.md` § GraphQL compatibility; task `#670/T5` owns the four residual classes.
 > **Why**: the effective-controller and served-owner projections intentionally answer different authority questions in
 > those classes, so the partial filter contract names the boundary instead of claiming universal field/filter equality.
-> **Planner evidence**: `pad_resolver_planner_statistics` inserts 5,000 `name_surfaces` and `name_current` rows; the owner plan fixture adds matching surface bindings and effective-controller rows plus two eligible sentinel names, distributed across owner populations of 4,797, 201, and six including the two base-fixture owners. It analyzes all seven participating tables.
-> These PostgreSQL 16 `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` values use ID ascending unless labeled otherwise, limit 200, 5,006 eligible ordered Domain/name rows, and 5,004 effective-controller relation rows, with no JIT or temporary blocks. `outer` is the ordered outer-row count, `removed` its filter-removal count, and `anti blocks` the cumulative shared-buffer count of the anti subtree.
+> **Planner evidence**: the SQL-seeded owner fixture contains 5,006 eligible ordered names and 5,004 effective-controller relations. It asserts that all 5,004 eligible owner names retain distinct bindings, resources, and token lineages. The 5,000 padded names, two eligible sentinel names, and base owners form owner populations of 4,797, 201, and six. All seven participating tables are analyzed. These tests exercise the bound identity shape; they do not run Ingest, Interpret, or Project.
+> The earlier fixture cleared name bindings and shared a resource/lineage across padded controllers. Retaining distinct identities fails its former 8,192 full-buffer and 4,096 ascending anti-subtree ceilings. The reviewed replacement fixture ceilings are 12,288 shared hit/read blocks per zero-offset page, 10,240 per prefix validation, and 6,144 per ascending anti subtree. For `skip: 200, first: 200`, the page ceiling is 24,576 and the combined prefix-plus-page ceiling is 34,816. Each bounded-request statement must cost less than 100,000; their combined estimated cost must be below 200,000. These are regression-fixture envelopes with headroom, not a universal latency or scalability SLO.
+> PostgreSQL 16 `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` measurements below use ID ascending and limit 200 unless labeled otherwise. Prefix rows are a single validation boolean; OFFSET page rows are the separate page statement. `outer` is name rows times loops, `max loops` spans every plan node, and `anti blocks` is the first anti subtree. All measurements have no JIT or temporary blocks. Representative OFFSET statements each visit at most 404 names/loops (prefix name visits at most 204); the rare descending case deliberately visits all 5,006 names and remains outside the bounded-page envelope.
 >
-> | operator | total cost | outer | removed | max loops | relation index | anti blocks | full blocks |
-> | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: |
-> | `owner` | 520.01 | 201 | 0 | 201 | `address_names_current_pkey` | — | 6,269 |
-> | `owner_in` | 519.76 | 201 | 0 | 201 | `address_names_current_pkey` | — | 6,269 |
-> | `owner_gt` | 12,747.36 | 200 | 0 | 200 | `address_names_current_name_idx` | — | 6,214 |
-> | `owner_contains` | 12,747.36 | 200 | 0 | 200 | `address_names_current_name_idx` | — | 6,214 |
-> | `owner_contains_nocase` | 12,747.36 | 200 | 0 | 200 | `address_names_current_name_idx` | — | 6,211 |
-> | `owner_ends_with` rare, ID descending; 6 results | 12,747.36 | 5,006 | 0 | 5,006 | `address_names_current_name_idx` | — | 40,467 |
-> | `owner_not` | 19,285.98 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,001 | 6,782 |
-> | `owner_not_in` | 19,285.73 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,000 | 6,780 |
-> | `owner_not_contains` | 19,285.98 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,000 | 6,780 |
-> | `owner_not_contains_nocase` | 19,285.98 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,001 | 6,782 |
-> | `owner_not_starts_with` | 19,285.98 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,000 | 6,780 |
-> | `owner_not_ends_with` | 19,285.98 | 200 | 0 | 200 | `address_names_current_name_idx` | 4,000 | 6,780 |
+> | statement/operator | total cost | rows | outer | max loops | anti blocks | full blocks |
+> | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+> | `NEGATIVE DESC` | 49,776.10 | 200 | 208 | 208 | 5,312 | 10,328 |
+> | `NEGATIVE owner_not` | 49,862.18 | 200 | 200 | 200 | 5,006 | 10,050 |
+> | `NEGATIVE owner_not_contains` | 49,862.18 | 200 | 200 | 200 | 5,000 | 10,018 |
+> | `NEGATIVE owner_not_contains_nocase` | 49,862.18 | 200 | 200 | 200 | 5,000 | 10,018 |
+> | `NEGATIVE owner_not_ends_with` | 49,862.18 | 200 | 200 | 200 | 5,000 | 10,021 |
+> | `NEGATIVE owner_not_ends_with_nocase` | 49,862.18 | 200 | 200 | 200 | 5,000 | 10,021 |
+> | `NEGATIVE owner_not_in` | 49,861.43 | 200 | 200 | 200 | 5,000 | 10,021 |
+> | `NEGATIVE owner_not_starts_with` | 49,862.18 | 200 | 200 | 200 | 5,000 | 10,018 |
+> | `NEGATIVE owner_not_starts_with_nocase` | 49,862.18 | 200 | 200 | 200 | 5,000 | 10,021 |
+> | `OFFSET PAGE owner` | 554.44 | 1 | 201 | 201 | 0 | 8,479 |
+> | `OFFSET PAGE owner_contains` | 38,861.92 | 200 | 400 | 400 | 0 | 17,248 |
+> | `OFFSET PAGE owner_in` | 554.19 | 1 | 201 | 201 | 0 | 8,476 |
+> | `POSITIVE owner` | 553.91 | 200 | 201 | 201 | 0 | 8,476 |
+> | `POSITIVE owner_contains` | 19,459.46 | 200 | 200 | 200 | 0 | 8,618 |
+> | `POSITIVE owner_contains_nocase` | 19,459.46 | 200 | 200 | 200 | 0 | 8,618 |
+> | `POSITIVE owner_ends_with` | 19,459.46 | 200 | 200 | 200 | 0 | 8,618 |
+> | `POSITIVE owner_ends_with_nocase` | 19,459.46 | 200 | 200 | 200 | 0 | 8,618 |
+> | `POSITIVE owner_gt` | 19,459.46 | 200 | 200 | 200 | 0 | 8,618 |
+> | `POSITIVE owner_gte` | 19,459.46 | 200 | 200 | 200 | 0 | 8,618 |
+> | `POSITIVE owner_in` | 553.66 | 200 | 201 | 201 | 0 | 8,476 |
+> | `POSITIVE owner_lt` | 19,459.46 | 200 | 200 | 200 | 0 | 8,618 |
+> | `POSITIVE owner_lte` | 19,459.46 | 200 | 200 | 200 | 0 | 8,618 |
+> | `POSITIVE owner_starts_with` | 19,459.46 | 200 | 200 | 200 | 0 | 8,618 |
+> | `POSITIVE owner_starts_with_nocase` | 19,459.46 | 200 | 200 | 200 | 0 | 8,618 |
+> | `PREFIX owner` | 544.79 | 1 | 200 | 400 | 8,894 | 8,894 |
+> | `PREFIX owner_contains` | 58.13 | 1 | 200 | 400 | 9,418 | 9,418 |
+> | `PREFIX owner_in` | 544.54 | 1 | 200 | 400 | 8,873 | 8,873 |
+> | `RARE DESC` | 19,459.46 | 6 | 5,006 | 5,006 | 0 | 31,204 |
+> Combined `skip: 200, first: 200` work: `owner` 17,373 blocks / 1,099.23 estimated cost; `owner_in` 17,349 blocks / 1,098.73 estimated cost; `owner_contains` 26,666 blocks / 38,920.05 estimated cost. These sums cover both SQL statements, not elapsed request latency.
 > **Since**: `2026-09-05`
 
 > **Generated Domain patterns preserve SQL wildcards** — generated contains patterns are left unchanged when they start or

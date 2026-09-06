@@ -69,6 +69,7 @@ async fn graphql_generated_domain_owner_positive_plans_are_relation_bounded_or_l
     seed_graphql_compat_fixture(&database).await?;
     pad_generated_owner_plans(&database).await?;
     let chains = ["ethereum-mainnet".to_owned()];
+    let mut budget_failures = Vec::new();
     for (member, value) in [
         ("owner", "0x0000000000000000000000000000000000000672"),
         ("owner_in", "0x0000000000000000000000000000000000000672"),
@@ -82,20 +83,50 @@ async fn graphql_generated_domain_owner_positive_plans_are_relation_bounded_or_l
         let filter = plan_domain_filter(member, value);
         let explain = crate::graphql::explain_phase_graphql_name_list_page(
             &database.lookup_pool, &chains, &filter, crate::graphql::GeneratedDomainSort::Id,
-            bigname_storage::NameCurrentListOrder::Asc, 200, 0,
+            bigname_storage::NameCurrentListOrder::Asc, 200, 0, false,
         ).await?;
         println!("OWNER POSITIVE {member} PLAN {}", serde_json::to_string_pretty(&explain)?);
-        assert_owner_plan_limits(&explain, member)?;
+        if let Err(error) = assert_owner_plan_limits(&explain, member) {
+            budget_failures.push(format!("{member}: {error}"));
+        }
         if matches!(member, "owner" | "owner_in" | "owner_contains") {
             let prefix = crate::graphql::explain_phase_graphql_name_list_page(
                 &database.lookup_pool, &chains, &filter, crate::graphql::GeneratedDomainSort::Id,
-                bigname_storage::NameCurrentListOrder::Asc, 200, 200,
+                bigname_storage::NameCurrentListOrder::Asc, 200, 200, true,
             ).await?;
             println!("OWNER PREFIX {member} PLAN {}", serde_json::to_string_pretty(&prefix)?);
+            let page = crate::graphql::explain_phase_graphql_name_list_page(
+                &database.lookup_pool, &chains, &filter, crate::graphql::GeneratedDomainSort::Id,
+                bigname_storage::NameCurrentListOrder::Asc, 200, 200, false,
+            ).await?;
+            println!("OWNER OFFSET PAGE {member} PLAN {}", serde_json::to_string_pretty(&page)?);
+            let page_plan = &page[0]["Plan"];
+            assert_eq!(page_plan["Node Type"], "Limit");
+            assert_eq!(page_plan["Actual Rows"], if member == "owner_contains" { 200 } else { 1 });
+            assert!(page_plan["Total Cost"].as_f64().unwrap_or(f64::MAX) < 100_000.0);
+            assert!(page[0].get("JIT").is_none());
+            assert_eq!(page_plan["Temp Read Blocks"], 0);
+            assert_eq!(page_plan["Temp Written Blocks"], 0);
+            assert!(plan_nodes(&page).iter().all(|node| node["Actual Loops"].as_u64().unwrap_or(0) <= 404));
             let plan = &prefix[0]["Plan"];
             assert_eq!(plan["Temp Written Blocks"], 0, "{member}: {plan}");
-            assert!(plan["Shared Hit Blocks"].as_u64().unwrap_or(0) + plan["Shared Read Blocks"].as_u64().unwrap_or(0) <= 8_192, "{member}: {plan}");
-            assert!(plan_nodes(&prefix).iter().all(|node| node["Actual Loops"].as_u64().unwrap_or(0) < 5_000), "{member}: {prefix}");
+            assert_eq!(plan["Temp Read Blocks"], 0, "{member}: {plan}");
+            assert!(prefix[0].get("JIT").is_none());
+            assert!(plan["Total Cost"].as_f64().unwrap_or(f64::MAX) < 100_000.0);
+            assert!(plan["Total Cost"].as_f64().unwrap_or(f64::MAX) + page_plan["Total Cost"].as_f64().unwrap_or(f64::MAX) < 200_000.0);
+            let page_blocks = page_plan["Shared Hit Blocks"].as_u64().unwrap_or(0) + page_plan["Shared Read Blocks"].as_u64().unwrap_or(0);
+            assert!(page_blocks <= 24_576, "offset page {member}: {page_blocks}");
+            for (statement, max_names) in [(&prefix, 204), (&page, 404)] {
+                let nodes = plan_nodes(statement);
+                let outer = nodes.iter().find(|node| node["Relation Name"] == "name_current" && node["Alias"] == "nc").context("offset ordered name probe")?;
+                assert!(outer["Actual Rows"].as_u64().unwrap_or(u64::MAX).saturating_mul(outer["Actual Loops"].as_u64().unwrap_or(u64::MAX)) <= max_names);
+            }
+            let blocks = plan["Shared Hit Blocks"].as_u64().unwrap_or(0) + plan["Shared Read Blocks"].as_u64().unwrap_or(0);
+            assert!(blocks + page_blocks <= 34_816, "whole OFFSET request {member}: prefix {blocks} + page {page_blocks}");
+            if blocks > 10_240 {
+                budget_failures.push(format!("prefix {member}: {blocks} blocks exceeds 10240"));
+            }
+            assert!(plan_nodes(&prefix).iter().all(|node| node["Actual Loops"].as_u64().unwrap_or(0) <= 404), "{member}: {prefix}");
         }
         let nodes = plan_nodes(&explain);
         if matches!(member, "owner" | "owner_in") {
@@ -116,7 +147,9 @@ async fn graphql_generated_domain_owner_positive_plans_are_relation_bounded_or_l
                 && node["Actual Loops"].as_u64().unwrap_or(0) <= 204), "page-driven indexed relation probe: {member}");
         }
     }
-    database.cleanup().await
+    database.cleanup().await?;
+    assert!(budget_failures.is_empty(), "owner plan budgets: {budget_failures:?}");
+    Ok(())
 }
 
 #[tokio::test]
@@ -125,6 +158,7 @@ async fn graphql_generated_domain_owner_negative_plans_are_page_bounded_anti_joi
     seed_graphql_compat_fixture(&database).await?;
     pad_generated_owner_plans(&database).await?;
     let chains = ["ethereum-mainnet".to_owned()];
+    let mut budget_failures = Vec::new();
     for (member, value) in [
         ("owner_not", GRAPHQL_OWNER), ("owner_not_in", GRAPHQL_OWNER),
         ("owner_not_contains", "000a"), ("owner_not_contains_nocase", "000A"),
@@ -135,15 +169,20 @@ async fn graphql_generated_domain_owner_negative_plans_are_page_bounded_anti_joi
         let filter = plan_domain_filter(member, value);
         let explain = crate::graphql::explain_phase_graphql_name_list_page(
             &database.lookup_pool, &chains, &filter, crate::graphql::GeneratedDomainSort::Id,
-            bigname_storage::NameCurrentListOrder::Asc, 200, 0,
+            bigname_storage::NameCurrentListOrder::Asc, 200, 0, false,
         ).await?;
         println!("OWNER NEGATIVE {member} PLAN {}", serde_json::to_string_pretty(&explain)?);
-        assert_owner_plan_limits(&explain, member)?;
+        if let Err(error) = assert_owner_plan_limits(&explain, member) {
+            budget_failures.push(format!("{member}: {error}"));
+        }
         let nodes = plan_nodes(&explain);
         let anti = nodes.iter().find(|node| node["Join Type"] == "Anti")
             .with_context(|| format!("anti-semijoin: {member}"))?;
         assert!(anti["Actual Loops"].as_u64().unwrap_or(u64::MAX) <= 204, "{member}: {anti}");
-        assert!(anti["Shared Hit Blocks"].as_u64().unwrap_or(0) + anti["Shared Read Blocks"].as_u64().unwrap_or(0) <= 4_096, "{member}: {anti}");
+        let anti_blocks = anti["Shared Hit Blocks"].as_u64().unwrap_or(0) + anti["Shared Read Blocks"].as_u64().unwrap_or(0);
+        if anti_blocks > 6_144 {
+            budget_failures.push(format!("{member}: anti blocks {anti_blocks} exceeds 6144"));
+        }
         let outer = nodes.iter().find(|node| node["Relation Name"] == "name_current" && node["Alias"] == "nc")
             .with_context(|| format!("ordered outer name_current scan: {member}"))?;
         assert!(outer["Actual Rows"].as_u64().unwrap_or(u64::MAX) <= 204, "{member}: {outer}");
@@ -153,7 +192,9 @@ async fn graphql_generated_domain_owner_negative_plans_are_page_bounded_anti_joi
         let returned = crate::graphql::load_phase_graphql_name_list_page_offset(&database.lookup_pool, &bigname_storage::NameCurrentListFilter { namespace: Some("ens".into()), ..Default::default() }, &chains, &filter, crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Asc, 200, 0).await?;
         assert!(returned.iter().any(|row| row.row.row.namehash == format!("0x{:064x}", 1_199)), "late second-owner target: {member}");
     }
-    database.cleanup().await
+    database.cleanup().await?;
+    assert!(budget_failures.is_empty(), "owner plan budgets: {budget_failures:?}");
+    Ok(())
 }
 
 #[tokio::test]
@@ -165,7 +206,7 @@ async fn graphql_generated_domain_owner_rare_pattern_plan_records_linear_directi
     let filter = plan_domain_filter("owner_ends_with", "00a");
     let explain = crate::graphql::explain_phase_graphql_name_list_page(
         &database.lookup_pool, &["ethereum-mainnet".to_owned()], &filter,
-        crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Desc, 200, 0,
+        crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Desc, 200, 0, false,
     ).await?;
     println!("OWNER RARE DESC PLAN {}", serde_json::to_string_pretty(&explain)?);
     let plan = &explain[0]["Plan"];
@@ -187,7 +228,7 @@ async fn graphql_generated_domain_owner_negative_desc_plan_exercises_removal_bou
     let filter = plan_domain_filter("owner_not", GRAPHQL_OWNER);
     let explain = crate::graphql::explain_phase_graphql_name_list_page(
         &database.lookup_pool, &["ethereum-mainnet".to_owned()], &filter,
-        crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Desc, 200, 0,
+        crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Desc, 200, 0, false,
     ).await?;
     println!("OWNER NEGATIVE DESC PLAN {}", serde_json::to_string_pretty(&explain)?);
     assert_owner_plan_limits(&explain, "owner_not_desc")?;
@@ -204,11 +245,11 @@ fn assert_owner_plan_limits(explain: &Value, member: &str) -> Result<()> {
     let plan = &explain[0]["Plan"];
     assert_eq!(plan["Node Type"], "Limit", "{member}");
     assert_eq!(plan["Actual Rows"], 200, "{member}: requested page");
-    assert!(plan["Total Cost"].as_f64().unwrap_or(f64::MAX) < 100_000.0, "{member}: {plan}");
+    anyhow::ensure!(plan["Total Cost"].as_f64().unwrap_or(f64::MAX) < 100_000.0, "{member}: page cost exceeds 100000: {plan}");
     assert!(explain[0].get("JIT").is_none(), "{member}: {explain}");
     assert_eq!(plan["Temp Read Blocks"].as_u64().unwrap_or(0), 0, "{member}");
     assert_eq!(plan["Temp Written Blocks"].as_u64().unwrap_or(0), 0, "{member}");
-    assert!(plan["Shared Hit Blocks"].as_u64().unwrap_or(0) + plan["Shared Read Blocks"].as_u64().unwrap_or(0) <= 8_192, "{member}: {plan}");
+    anyhow::ensure!(plan["Shared Hit Blocks"].as_u64().unwrap_or(0) + plan["Shared Read Blocks"].as_u64().unwrap_or(0) <= 12_288, "{member}: page blocks exceeds 12288: {plan}");
     assert!(plan_nodes(explain).iter().all(|node| node["Actual Loops"].as_u64().unwrap_or(0) < 5_000), "{member}: {explain}");
     let text = serde_json::to_string(plan)?;
     assert!(text.contains("effective_controller") && text.contains("canonical_lineage"), "eligible effective owner below Limit: {member}");
@@ -254,6 +295,26 @@ async fn pad_generated_owner_plans(database: &TestDatabase) -> Result<()> {
             Uuid::from_u128(0x670_4002 + index as u128 * 3), Uuid::from_u128(0x670_4003 + index as u128 * 3),
             owner, bigname_storage::AddressNameRelation::EffectiveController, 740 + index as i64).await?;
     }
+    let resources = sqlx::query(
+        r#"WITH generated AS (
+              SELECT * FROM bigname_phase.name_surfaces
+              WHERE namehash BETWEEN '0x00000000000000000000000000000000000000000000000000000000000003e8'
+                                 AND '0x000000000000000000000000000000000000000000000000000000000000176f'
+            ), lineages AS (
+              INSERT INTO bigname_phase.token_lineages (
+                token_lineage_id, chain_id, block_hash, block_number, canonicality_state
+              ) SELECT MD5('owner-token-' || logical_name_id)::UUID,
+                  chain_id, block_hash, block_number, canonicality_state FROM generated
+              RETURNING *
+            ) INSERT INTO bigname_phase.resources (
+              resource_id, token_lineage_id, chain_id, block_hash, block_number, canonicality_state
+            ) SELECT MD5('owner-resource-' || generated.logical_name_id)::UUID,
+                lineages.token_lineage_id, lineages.chain_id, lineages.block_hash,
+                lineages.block_number, lineages.canonicality_state
+              FROM generated JOIN lineages
+                ON lineages.token_lineage_id = MD5('owner-token-' || generated.logical_name_id)::UUID"#,
+    ).execute(&database.lookup_pool).await?;
+    assert_eq!(resources.rows_affected(), 5_000);
     let bindings = sqlx::query(
         r#"WITH source AS (
               SELECT binding.* FROM bigname_phase.surface_bindings binding
@@ -268,7 +329,7 @@ async fn pad_generated_owner_plans(database: &TestDatabase) -> Result<()> {
               surface_binding_id, logical_name_id, resource_id, binding_kind, authority_arm,
               active_from, active_to, chain_id, block_hash, block_number, provenance, canonicality_state
             ) SELECT MD5('owner-plan-' || generated.logical_name_id)::UUID,
-                generated.logical_name_id, source.resource_id, source.binding_kind, source.authority_arm,
+                generated.logical_name_id, MD5('owner-resource-' || generated.logical_name_id)::UUID, source.binding_kind, source.authority_arm,
                 source.active_from, source.active_to, generated.chain_id, generated.block_hash,
                 generated.block_number, source.provenance, source.canonicality_state
               FROM generated CROSS JOIN source"#,
@@ -310,17 +371,19 @@ async fn pad_generated_owner_plans(database: &TestDatabase) -> Result<()> {
     assert_eq!(relations.rows_affected(), 5_000);
     let eligible_relations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bigname_phase.address_names_current WHERE relation = 'effective_controller'").fetch_one(&database.lookup_pool).await?;
     assert_eq!(eligible_relations, 5_004);
-    sqlx::query(
-        r#"UPDATE bigname_phase.name_current SET
-              surface_binding_id = NULL, resource_id = NULL, token_lineage_id = NULL, binding_kind = NULL
-            WHERE namehash BETWEEN '0x00000000000000000000000000000000000000000000000000000000000003e8'
-                               AND '0x000000000000000000000000000000000000000000000000000000000000176f'"#,
-    )
-    .execute(&database.lookup_pool)
-    .await?;
     sqlx::query("ANALYZE bigname_phase.name_current, bigname_phase.address_names_current, bigname_phase.name_surfaces, bigname_phase.resources, bigname_phase.surface_bindings, bigname_phase.chain_lineage, bigname_phase.token_lineages")
         .execute(&database.lookup_pool)
         .await?;
+    let mut eligible = sqlx::QueryBuilder::<sqlx::Postgres>::new("");
+    let storage_filter = bigname_storage::NameCurrentListFilter { namespace: Some("ens".into()), ..Default::default() };
+    let owner_filter = plan_domain_filter("owner_contains", "0x");
+    let chains = ["ethereum-mainnet".to_owned()];
+    crate::graphql::push_filtered_names(
+        &mut eligible, &storage_filter, None, Some(&owner_filter), Some(&chains), false,
+    );
+    eligible.push(" SELECT COUNT(*), COUNT(*) FILTER (WHERE surface_binding_id IS NOT NULL AND resource_id IS NOT NULL AND token_lineage_id IS NOT NULL AND binding_kind IS NOT NULL), COUNT(DISTINCT surface_binding_id), COUNT(DISTINCT resource_id), COUNT(DISTINCT token_lineage_id) FROM filtered_names");
+    let counts: (i64, i64, i64, i64, i64) = eligible.build_query_as().fetch_one(&database.lookup_pool).await?;
+    assert_eq!(counts, (5_004, 5_004, 5_004, 5_004, 5_004), "every eligible owner name must retain its own binding/resource/lineage");
     Ok(())
 }
 
@@ -401,7 +464,7 @@ async fn graphql_generated_domain_operator_plans_are_index_bounded_or_linear() -
     crate::graphql::explain_phase_graphql_name_list_page(
         &database.lookup_pool, &chains, &Default::default(),
         crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Desc,
-        200, 0,
+        200, 0, false,
     ).await?;
     let members = [
         "id", "id_not", "id_gt", "id_gte", "id_lt", "id_lte", "id_in", "id_not_in",
@@ -427,7 +490,7 @@ async fn graphql_generated_domain_operator_plans_are_index_bounded_or_linear() -
         let explain = crate::graphql::explain_phase_graphql_name_list_page(
             &database.lookup_pool, &chains, &filter,
             crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Desc,
-            200, 0,
+            200, 0, false,
         ).await?;
         println!("DOMAIN OPERATOR {member} PLAN {}", serde_json::to_string_pretty(&explain)?);
         if matches!(member, "id" | "id_gt" | "id_gte" | "id_lt" | "id_lte" | "id_in") {
@@ -452,7 +515,7 @@ async fn graphql_generated_domain_operator_plans_are_index_bounded_or_linear() -
     let late_explain = crate::graphql::explain_phase_graphql_name_list_page(
         &database.lookup_pool, &chains, &late_name,
         crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Asc,
-        200, 0,
+        200, 0, false,
     ).await?;
     let late_scan = plan_nodes(&late_explain)
         .into_iter()
@@ -478,7 +541,7 @@ async fn graphql_generated_domain_order_plans_are_index_bounded_or_linear() -> R
     crate::graphql::explain_phase_graphql_name_list_page(
         &database.lookup_pool, &chains, &Default::default(),
         crate::graphql::GeneratedDomainSort::Id, bigname_storage::NameCurrentListOrder::Asc,
-        200, 0,
+        200, 0, false,
     ).await?;
     let sorts = [
         crate::graphql::GeneratedDomainSort::Id,
@@ -493,7 +556,7 @@ async fn graphql_generated_domain_order_plans_are_index_bounded_or_linear() -> R
     for sort in sorts {
         let explain = crate::graphql::explain_phase_graphql_name_list_page(
             &database.lookup_pool, &chains, &Default::default(), sort,
-            bigname_storage::NameCurrentListOrder::Asc, 200, 0,
+            bigname_storage::NameCurrentListOrder::Asc, 200, 0, false,
         ).await?;
         println!("DOMAIN ORDER {sort:?} PLAN {}", serde_json::to_string_pretty(&explain)?);
         if sort == crate::graphql::GeneratedDomainSort::Id {
@@ -509,7 +572,7 @@ async fn graphql_generated_domain_order_plans_are_index_bounded_or_linear() -> R
     let unselective_range = crate::graphql::explain_phase_graphql_name_list_page(
         &database.lookup_pool, &chains, &id_lt,
         crate::graphql::GeneratedDomainSort::Storage(bigname_storage::NameCurrentListSort::Name),
-        bigname_storage::NameCurrentListOrder::Asc, 200, 0,
+        bigname_storage::NameCurrentListOrder::Asc, 200, 0, false,
     ).await?;
     assert_flat_eligibility(&unselective_range, "unselective id_lt with name order")?;
 
@@ -517,7 +580,7 @@ async fn graphql_generated_domain_order_plans_are_index_bounded_or_linear() -> R
     let selective_range = crate::graphql::explain_phase_graphql_name_list_page(
         &database.lookup_pool, &chains, &id_gt,
         crate::graphql::GeneratedDomainSort::Storage(bigname_storage::NameCurrentListSort::Name),
-        bigname_storage::NameCurrentListOrder::Asc, 200, 0,
+        bigname_storage::NameCurrentListOrder::Asc, 200, 0, false,
     ).await?;
     println!("DOMAIN SELECTIVE ID_GT NAME PLAN {}",
         serde_json::to_string_pretty(&selective_range)?);
@@ -528,7 +591,7 @@ async fn graphql_generated_domain_order_plans_are_index_bounded_or_linear() -> R
     let bounded_equality = crate::graphql::explain_phase_graphql_name_list_page(
         &database.lookup_pool, &chains, &id,
         crate::graphql::GeneratedDomainSort::Storage(bigname_storage::NameCurrentListSort::Name),
-        bigname_storage::NameCurrentListOrder::Asc, 200, 0,
+        bigname_storage::NameCurrentListOrder::Asc, 200, 0, false,
     ).await?;
     assert_id_index_bounded(&bounded_equality, "id equality with name order")?;
 
@@ -536,7 +599,7 @@ async fn graphql_generated_domain_order_plans_are_index_bounded_or_linear() -> R
     let bounded_membership = crate::graphql::explain_phase_graphql_name_list_page(
         &database.lookup_pool, &chains, &id_in,
         crate::graphql::GeneratedDomainSort::Storage(bigname_storage::NameCurrentListSort::Name),
-        bigname_storage::NameCurrentListOrder::Asc, 200, 0,
+        bigname_storage::NameCurrentListOrder::Asc, 200, 0, false,
     ).await?;
     assert_id_index_bounded(&bounded_membership, "id membership with name order")?;
     database.cleanup().await

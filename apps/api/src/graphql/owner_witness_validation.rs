@@ -26,7 +26,13 @@ fn push_prefix_validation(
     builder.push(" LIMIT ").push_bind(i64::try_from(offset)?);
     builder.push(
         ") SELECT EXISTS (SELECT 1 FROM owner_prefix \
-         CROSS JOIN LATERAL JSONB_ARRAY_ELEMENTS(membership_targets) witness(target) \
+         CROSS JOIN LATERAL ( \
+           SELECT JSONB_BUILD_OBJECT('chain_id', position.value -> 'chain_id', \
+             'target_block_number', position.value -> 'block_number', \
+             'target_block_hash', position.value -> 'block_hash') AS target \
+           FROM JSONB_EACH(chain_positions) position \
+           UNION ALL SELECT target FROM JSONB_ARRAY_ELEMENTS(membership_targets) target \
+         ) witness \
          WHERE NOT EXISTS (SELECT 1 FROM bigname_phase.chain_heads owner_head \
            WHERE owner_head.chain_id = target ->> 'chain_id' \
              AND JSONB_TYPEOF(target -> 'target_block_number') = 'number' \
@@ -101,6 +107,7 @@ pub async fn explain_phase_graphql_name_list_page(
     order: NameCurrentListOrder,
     limit: u64,
     offset: u64,
+    prefix_validation: bool,
 ) -> Result<Value> {
     let storage_filter = NameCurrentListFilter {
         namespace: Some("ens".into()),
@@ -115,8 +122,8 @@ pub async fn explain_phase_graphql_name_list_page(
         Some(snapshot_chain_ids),
         indexed_page(sort, filter),
     );
-    // Nonzero offsets explain the additional validation query run by the loader.
-    if offset > 0 {
+    // Explain either actual statement of an OFFSET request independently.
+    if prefix_validation {
         push_prefix_validation(&mut builder, sort, order, offset)?;
         return Ok(builder.build().fetch_one(pool).await?.try_get(0)?);
     }
