@@ -830,7 +830,7 @@ to the product and record-diagnostic routes; a family outside it is rejected as
   An unknown activated migration-path value blocks the Project generation as a
   data-integrity failure instead of silently hiding relations. A child whose
   arms disagree with no authority proof is omitted entirely. On every ENS
-  deployment profile (Mainnet and Sepolia), an ENSv1 relation that survives
+  [deployment profile](glossary.md#deployment-profile) (Mainnet and Sepolia), an ENSv1 relation that survives
   parent reachability and
   was asserted after a proven ENSv2 child authority began blocks Project
   publication for that generation,
