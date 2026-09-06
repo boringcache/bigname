@@ -872,7 +872,15 @@ keeps the original [pre-surface](glossary.md#pre-surface) ENSv1 registry `Resolv
 then adds a name- and resource-linked, [state-derived](glossary.md#state-derived-normalized-event) `ResolverChanged` when the
 first active [name surface](glossary.md#surface-name-surface) is learned. Product
 events or name history may therefore gain one historical resolver row, while
-diagnostics may gain each linked resource copy. A cursor issued before this
+diagnostics may gain each linked resource copy. When current-registry ownership
+ends old-registry fallback, its resource-specific resolver-clear copies represent
+one ownership-log/node transition. Product history selects the lexically first
+stable event identity among the activated copies matching the request and its
+canonicality filters. Selection happens before pagination and is shared by
+counts, summaries, and cursor validation. A resource-only request therefore
+retains its matching clear even when another resource has the globally first
+copy; a sole matching clear is never suppressed. All normalized copies remain
+available to diagnostics, projection, and replay. A cursor issued before this
 change has no continuation guarantee and may be rejected. Consumers must
 discard pre-#613 cursors and restart from the first page; fresh post-publication
 cursors continue normally.

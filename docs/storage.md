@@ -805,7 +805,10 @@ state used for serving, while its block, transaction, log, canonicality, and
 `raw_fact_ref` come from the renewal that materializes the surface. It retains
 the existing `ens_v1_unwrapped_authority` derivation kind and is distinguished
 by `after_state.state_derived=true`. The earlier [pre-surface](glossary.md#pre-surface)
-`ResolverChanged` keeps null `logical_name_id` and `resource_id` and remains immutable. This behavior requires no
+`ResolverChanged` keeps its null `logical_name_id` and remains immutable. Its
+`resource_id` may already identify a known control authority before the surface
+is learned; it remains null when no authority or registry read resource was known.
+This behavior requires no
 `normalized_events` check change or schema-migration.
 Surface-materialization and per-log authority-transition resolver copies carry
 `after_state.resolver_source_role`, preserving their old- or current-registry origin
