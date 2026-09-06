@@ -1,0 +1,26 @@
+workspace = "boringcache/benchmarks"
+
+[entries.cargo-target]
+kind = "cargo-target"
+tag = "bigname-phase-runner-20260906-v2-rolling-target"
+path = "target"
+
+[entries.cargo-registry]
+tag = "bigname-phase-runner-20260906-v2-rolling-registry"
+
+[entries.cargo-git]
+tag = "bigname-phase-runner-20260906-v2-rolling-git"
+
+[profiles.cargo]
+entries = ["cargo-target", "cargo-registry", "cargo-git"]
+
+[adapters.sccache]
+tag = "bigname-phase-runner-20260906-v2-rolling-compiler"
+
+[adapters.cargo]
+tag = "bigname-phase-runner-20260906-v2-rolling"
+profiles = ["cargo"]
+compiler-cache = "sccache"
+command = ["cargo", "nextest", "run", "-p", "phase-runner", "-p", "bigname-ingest", "-p", "bigname-interpret", "-p", "bigname-content-hash", "-p", "bigname-benchmark-gate", "-p", "bigname-lookup", "-p", "bigname-project", "-p", "bigname-metrics", "--all-features", "--no-fail-fast", "--partition", "slice:1/3"]
+fail-on-cache-error = true
+metadata-hints = ["project=bigname", "workload=phase-runner-shard-1"]
