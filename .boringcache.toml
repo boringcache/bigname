@@ -21,6 +21,6 @@ tag = "bigname-phase-runner-20260906-compiler"
 tag = "bigname-phase-runner-20260906"
 profiles = ["cargo"]
 compiler-cache = "sccache"
-command = ["./scripts/test-db", "--", "cargo", "nextest", "run", "-p", "phase-runner", "-p", "bigname-ingest", "-p", "bigname-interpret", "-p", "bigname-content-hash", "-p", "bigname-benchmark-gate", "-p", "bigname-lookup", "-p", "bigname-project", "-p", "bigname-metrics", "--all-features", "--no-fail-fast", "--partition", "slice:1/3"]
+command = ["cargo", "nextest", "run", "-p", "phase-runner", "-p", "bigname-ingest", "-p", "bigname-interpret", "-p", "bigname-content-hash", "-p", "bigname-benchmark-gate", "-p", "bigname-lookup", "-p", "bigname-project", "-p", "bigname-metrics", "--all-features", "--no-fail-fast", "--partition", "slice:1/3"]
 fail-on-cache-error = true
 metadata-hints = ["project=bigname", "workload=phase-runner-shard-1"]
