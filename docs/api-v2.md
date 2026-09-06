@@ -880,7 +880,9 @@ canonicality filters. Selection happens before pagination and is shared by
 counts, summaries, and cursor validation. A resource-only request therefore
 retains its matching clear even when another resource has the globally first
 copy; a sole matching clear is never suppressed. All normalized copies remain
-available to diagnostics, projection, and replay. A cursor issued before this
+available to diagnostics, projection, and replay.
+(upstream: .refs/ens_v1/contracts/registry/ENSRegistryWithFallback.sol:L18-L24 @ ens_v1@91c966f)
+A cursor issued before this
 change has no continuation guarantee and may be rejected. Consumers must
 discard pre-#613 cursors and restart from the first page; fresh post-publication
 cursors continue normally.
