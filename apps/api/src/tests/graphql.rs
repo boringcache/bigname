@@ -2813,7 +2813,7 @@ async fn graphql_owner_hidden_negative_witness_refuses() -> Result<()> {
     let mut missing = Vec::new();
     for filter in filters {
         let response = post_graphql_allow_errors(database.app_state(), query, json!({"where": filter})).await?;
-        if !response["errors"].as_array().is_some_and(|errors| !errors.is_empty()) {
+        if response["errors"].as_array().is_none_or(|errors| errors.is_empty()) {
             missing.push((filter, response));
         }
     }
@@ -2848,7 +2848,7 @@ async fn graphql_owner_hidden_offset_witness_refuses() -> Result<()> {
         let control = post_graphql_allow_errors(database.app_state(), query, json!({"where": filter, "skip": 0, "first": 1})).await?;
         assert!(control["errors"].as_array().is_some_and(|errors| !errors.is_empty()), "{control}");
         let page = post_graphql_allow_errors(database.app_state(), query, json!({"where": filter, "skip": 1, "first": 1})).await?;
-        if !page["errors"].as_array().is_some_and(|errors| !errors.is_empty()) {
+        if page["errors"].as_array().is_none_or(|errors| errors.is_empty()) {
             missing.push((filter, page));
         }
     }
