@@ -203,7 +203,7 @@ route is already absent before ENSv1→ENSv2 migration.
 
 `forge` must be on `PATH` before the 64 Foundry-dependent semantic scenarios are
 described as runnable; the other 3 semantic scenarios are retired and ignored.
-Together with the two pre-surface resolver scenarios, these three connected
+Together with the two [pre-surface](../../docs/glossary.md#pre-surface) resolver scenarios, these three connected
 scenarios produce a counted inventory of 92 tests: 89 runnable and 3 ignored,
 split as 44 runnable plus 2 ignored on shard 1 and 45 runnable plus 1 ignored on
 shard 2. This coverage changes no production rollout,
