@@ -55,19 +55,21 @@ jobs:
       RUSTC_WRAPPER: sccache
       SCCACHE_IDLE_TIMEOUT: '0'
       SCCACHE_GHA_ENABLED: ${{ matrix.provider == 'github' && 'true' || 'false' }}
+      CC: sccache cc
+      CXX: sccache c++
     steps:
     - name: Select pinned source
       id: source
       shell: bash
       env:
-        SOURCES: '{"cold": {"source_sha": "747c19b1e1295d8768f910b2fe0f9e0024613ebc", "upstream_sha": "13a20cbed469f82c238264e5bbfceb115adf6dd9"},
-          "warm": {"source_sha": "747c19b1e1295d8768f910b2fe0f9e0024613ebc", "upstream_sha": "13a20cbed469f82c238264e5bbfceb115adf6dd9"},
-          "seed": {"source_sha": "1ce926a38b7b68a457878b2e19dd9db53bc0c23f", "upstream_sha": "199d64f5b32aa1368e1e7862bd93e0c464d7408d",
-          "branch": "boringcache-rolling-seed"}, "commit1": {"source_sha": "9b4d01765e4530d0265df31f7d4f45211ddbe5fe",
-          "upstream_sha": "c595ec078d72ddd19c1fcd303bbdf89fd0d30276", "branch": "boringcache-rolling-1"}, "commit2":
-          {"source_sha": "86842d9cda9846a7f905fa40057f631ee0540e08", "upstream_sha": "1e8e52d5228c1177438cad6bcdb711ac928985c9",
-          "branch": "boringcache-rolling-2"}, "commit3": {"source_sha": "2afca324d9923800e724d25dab6608b7faf49a71",
-          "upstream_sha": "13a20cbed469f82c238264e5bbfceb115adf6dd9", "branch": "boringcache-rolling-3"}}'
+        SOURCES: '{"cold": {"source_sha": "8325557717e83fb980780939b38623b7dd12a3d7", "upstream_sha": "13a20cbed469f82c238264e5bbfceb115adf6dd9"},
+          "warm": {"source_sha": "8325557717e83fb980780939b38623b7dd12a3d7", "upstream_sha": "13a20cbed469f82c238264e5bbfceb115adf6dd9"},
+          "seed": {"source_sha": "726f8cd2ec092fc499a375b43d024e0af734d699", "upstream_sha": "199d64f5b32aa1368e1e7862bd93e0c464d7408d",
+          "branch": "boringcache-rolling-seed-v2"}, "commit1": {"source_sha": "428a9fb6566cecf08548e0fbb1247d5899b3f653",
+          "upstream_sha": "c595ec078d72ddd19c1fcd303bbdf89fd0d30276", "branch": "boringcache-rolling-1-v2"}, "commit2":
+          {"source_sha": "3a77b27ec13e3d07a9f43685189ccfc19d77b8b2", "upstream_sha": "1e8e52d5228c1177438cad6bcdb711ac928985c9",
+          "branch": "boringcache-rolling-2-v2"}, "commit3": {"source_sha": "223b5fc7e30901a8db813cf2772955884573eccd",
+          "upstream_sha": "13a20cbed469f82c238264e5bbfceb115adf6dd9", "branch": "boringcache-rolling-3-v2"}}'
       run: |
         python - <<'PY'
         import json, os
@@ -81,15 +83,17 @@ jobs:
             f.write('COHORT=' + ('fresh' if phase in ('cold', 'warm') else 'rolling') + '\n')
             f.write('CACHE_MODE=' + ('--read-only' if phase == 'warm' else '--write') + '\n')
         PY
+      working-directory: ${{ github.workspace }}
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ steps.source.outputs.sha }}
         persist-credentials: false
+        path: source
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: boringcache/benchmarks
-        ref: 7c31b58b4c26cdc9b5639bb58081fb76ef6a3298
-        path: .benchmark-harness
+        ref: 3869ca64b0dcb5befeeecd300c20a1b0b86cdaa3
+        path: harness
         persist-credentials: false
     - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
       with:
@@ -104,13 +108,13 @@ jobs:
     - name: Select compiler object namespace
       shell: bash
       run: |-
-        echo "SCCACHE_GHA_VERSION=bigname-20260906-$COHORT" >> "$GITHUB_ENV"
+        echo "SCCACHE_GHA_VERSION=bigname-20260906-v2-$COHORT" >> "$GITHUB_ENV"
         echo "SCCACHE_GHA_RW_MODE=$([ "$PHASE" = warm ] && echo READ_ONLY || echo READ_WRITE)" >> "$GITHUB_ENV"
     - name: Install shared compiler-cache version
       uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
       with:
         version: v0.17.0
-    - uses: ./.benchmark-harness/.github/actions/prospect-cli
+    - uses: ./harness/.github/actions/prospect-cli
       with:
         cli-version: ${{ inputs.cli_version }}
     - name: Compute phase-runner dependency-cache key
@@ -118,7 +122,7 @@ jobs:
       run: |
         root_lock_sha="$(sha256sum Cargo.lock | cut -d' ' -f1)"
         e2e_lock_sha="$(sha256sum tests/e2e/Cargo.lock | cut -d' ' -f1)"
-        prefix="bigname-20260906-${COHORT}-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
+        prefix="bigname-20260906-v2-${COHORT}-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
         runner_arch="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
         primary="${prefix}-phase-runner-${RUNNER_OS}-${runner_arch}"
         echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
@@ -132,26 +136,31 @@ jobs:
         shared-key: phase-runner
         add-job-id-key: false
         add-rust-environment-hash-key: false
-        workspaces: . -> target
+        workspaces: source -> target
         cache-workspace-crates: false
         save-if: ${{ env.PHASE != 'warm' }}
       if: matrix.provider == 'github'
+    - name: Require a clean pinned source checkout
+      shell: bash
+      run: |-
+        git diff HEAD --exit-code
+        test -z "$(git status --porcelain)"
     - name: Measure GitHub workload
       if: matrix.provider == 'github'
       shell: bash
-      run: python .benchmark-harness/scripts/prospects/measure-command.py build -- ./scripts/test-db -- cargo nextest
-        run -p phase-runner -p bigname-ingest -p bigname-interpret -p bigname-content-hash -p bigname-benchmark-gate
+      run: python ../harness/scripts/prospects/measure-command.py build -- ./scripts/test-db -- cargo nextest run
+        -p phase-runner -p bigname-ingest -p bigname-interpret -p bigname-content-hash -p bigname-benchmark-gate
         -p bigname-lookup -p bigname-project -p bigname-metrics --all-features --no-fail-fast --partition slice:1/3
     - name: Measure BoringCache workload
       if: matrix.provider == 'boringcache'
       shell: bash
-      run: python .benchmark-harness/scripts/prospects/measure-command.py build -- ./scripts/test-db -- boringcache
-        ci run --oidc-provider github-actions -- boringcache cargo "$CACHE_MODE" --fail-on-cache-error
+      run: python ../harness/scripts/prospects/measure-command.py build -- ./scripts/test-db -- boringcache ci run
+        --oidc-provider github-actions -- boringcache cargo "$CACHE_MODE" --fail-on-cache-error
     - name: Measure upstream doctests
       shell: bash
-      run: python .benchmark-harness/scripts/prospects/measure-command.py doctests -- ./scripts/test-db -- cargo
-        test -p phase-runner -p bigname-ingest -p bigname-interpret -p bigname-content-hash -p bigname-benchmark-gate
-        -p bigname-lookup -p bigname-project -p bigname-metrics --all-features --doc
+      run: python ../harness/scripts/prospects/measure-command.py doctests -- ./scripts/test-db -- cargo test -p
+        phase-runner -p bigname-ingest -p bigname-interpret -p bigname-content-hash -p bigname-benchmark-gate -p
+        bigname-lookup -p bigname-project -p bigname-metrics --all-features --doc
     - name: Record GitHub compiler statistics
       if: always() && matrix.provider == 'github'
       shell: bash
@@ -177,3 +186,6 @@ jobs:
         - 5432:5432
         options: --health-cmd "pg_isready -U bigname -d bigname" --health-interval 5s --health-timeout 5s --health-retries
           10
+    defaults:
+      run:
+        working-directory: source
