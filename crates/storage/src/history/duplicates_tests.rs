@@ -3,7 +3,7 @@ use bigname_test_support::{TestDatabase, TestDatabaseConfig};
 use serde_json::Value;
 use sqlx::{PgConnection, Postgres, QueryBuilder};
 
-use super::{
+use super::super::{
     EventHistoryReadFilter, duplicates::push_product_history_duplicate_filter,
     paging::push_history_filters, source::push_history_source,
 };
@@ -70,6 +70,8 @@ async fn exercise_plan(connection: &mut PgConnection) -> Result<()> {
     let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (FORMAT JSON) {sql}"))
         .fetch_one(&mut *connection)
         .await?;
+    eprintln!("planned global count: {plan}");
+    assert_no_unbounded_nested_loop_scan(&plan[0]["Plan"], false);
     let mut candidates = Vec::new();
     candidate_scans(&plan[0]["Plan"], false, &mut candidates);
     assert!(
@@ -120,6 +122,20 @@ fn candidate_scans<'a>(node: &'a Value, in_subplan: bool, output: &mut Vec<&'a V
     if let Some(children) = node["Plans"].as_array() {
         for child in children {
             candidate_scans(child, in_subplan, output);
+        }
+    }
+}
+
+fn assert_no_unbounded_nested_loop_scan(node: &Value, repeated: bool) {
+    assert!(
+        !(repeated && node["Node Type"] == "Seq Scan"),
+        "global history plan repeats an unbounded table scan: {node}"
+    );
+    if let Some(children) = node["Plans"].as_array() {
+        for child in children {
+            let repeated = repeated
+                || (node["Node Type"] == "Nested Loop" && child["Parent Relationship"] == "Inner");
+            assert_no_unbounded_nested_loop_scan(child, repeated);
         }
     }
 }
