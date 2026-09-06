@@ -1912,8 +1912,8 @@ async fn assert_handoff_product_history(
     clears: &[(String, String, bool, Uuid)],
 ) -> Result<()> {
     use bigname_storage::{
-        EventHistoryFilter, HistoryScope, HistorySummaryMode, load_event_history_page,
-        load_name_history, load_resource_history,
+        EventHistoryAddressFilter, EventHistoryFilter, HistoryScope, HistorySummaryMode,
+        load_event_history_page, load_name_history, load_resource_history,
     };
     let logical_name: String = sqlx::query_scalar(
         "SELECT logical_name_id FROM name_current WHERE raw_name = 'pointer.eth'",
@@ -1944,6 +1944,35 @@ async fn assert_handoff_product_history(
     );
     assert_eq!(page.rows.len(), 2);
     assert!(page.next_cursor.is_none());
+    for address in [
+        None,
+        Some(EventHistoryAddressFilter {
+            address: PRIOR_REGISTRY_OWNER.into(),
+            relation: None,
+        }),
+    ] {
+        let scoped = EventHistoryFilter {
+            logical_name_id: None,
+            address,
+            ..filter.clone()
+        };
+        let scope_page = load_event_history_page(
+            pool,
+            scoped,
+            true,
+            None,
+            10,
+            HistorySummaryMode::Full,
+            false,
+        )
+        .await?;
+        assert_eq!(
+            scope_page.rows.len(),
+            2,
+            "global/address scope preserves one handoff plus the resolver selection"
+        );
+        assert_eq!(scope_page.summary.unwrap().total_count, 2);
+    }
     let diagnostic = load_event_history_page(
         pool,
         filter.clone(),
