@@ -5,7 +5,7 @@ use sqlx::{PgConnection, Postgres, QueryBuilder};
 
 use super::super::{
     EventHistoryReadFilter, duplicates::push_product_history_duplicate_filter,
-    paging::push_history_filters, source::push_history_source,
+    paging::push_history_filters, selectors::HistorySelector, source::push_history_source,
 };
 
 #[tokio::test]
@@ -138,4 +138,60 @@ fn assert_no_unbounded_nested_loop_scan(node: &Value, repeated: bool) {
             assert_no_unbounded_nested_loop_scan(child, repeated);
         }
     }
+}
+
+#[tokio::test]
+async fn expanded_history_selectors_fit_postgres_bind_limit() -> Result<()> {
+    let database =
+        TestDatabase::create(TestDatabaseConfig::new("history_binds").pool_max_connections(1))
+            .await?;
+    let result = async {
+        let mut connection = database.pool().acquire().await?;
+        sqlx::raw_sql("CREATE SCHEMA bigname_phase; SET search_path TO bigname_phase, public")
+            .execute(&mut *connection)
+            .await?;
+        for baseline in [
+            include_str!("../../../../schema-v2/baseline/01_chain.sql"),
+            include_str!("../../../../schema-v2/baseline/02_raw_facts.sql"),
+            include_str!("../../../../schema-v2/baseline/03_identity.sql"),
+            include_str!("../../../../schema-v2/baseline/04_manifests.sql"),
+            include_str!("../../../../schema-v2/baseline/05_normalized_events.sql"),
+        ] {
+            sqlx::raw_sql(baseline).execute(&mut *connection).await?;
+        }
+        // Address expansion has no anchor count limit. Execute the production
+        // outer filter and representative subquery with more than 32,768 anchors.
+        // Empty history is sufficient: PostgreSQL rejects oversized bind lists
+        // before row execution, independently of whether any anchor matches.
+        let names: Vec<String> = (0..34000).map(|n| format!("ens:0x{n:064x}")).collect();
+        let resources: Vec<uuid::Uuid> = (0..34000).map(uuid::Uuid::from_u128).collect();
+        for selector in [
+            HistorySelector::logical_names(names.clone()),
+            HistorySelector::resources(resources.clone()),
+            HistorySelector::logical_names_or_resources(
+                names[..17000].to_vec(),
+                resources[..17000].to_vec(),
+            ),
+        ] {
+            let filter = EventHistoryReadFilter {
+                selectors: vec![selector],
+                ..Default::default()
+            };
+            let mut query = QueryBuilder::<Postgres>::new("SELECT count(*)::bigint");
+            push_history_source(&mut query, false);
+            push_history_filters(&mut query, &filter, true);
+            push_product_history_duplicate_filter(&mut query, &filter, true);
+            assert_eq!(
+                query
+                    .build_query_scalar::<i64>()
+                    .fetch_one(&mut *connection)
+                    .await?,
+                0
+            );
+        }
+        Ok(())
+    }
+    .await;
+    database.cleanup().await?;
+    result
 }

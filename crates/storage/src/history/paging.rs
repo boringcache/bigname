@@ -538,12 +538,9 @@ fn push_string_filter<'a>(
 }
 
 fn push_string_filter_tail<'a>(builder: &mut QueryBuilder<'a, Postgres>, values: &'a [String]) {
-    builder.push(" IN (");
-    let mut separated = builder.separated(", ");
-    for value in values {
-        separated.push_bind(value);
-    }
-    separated.push_unseparated(")");
+    builder.push(" = ANY(");
+    builder.push_bind(values);
+    builder.push("::text[])");
 }
 
 fn push_uuid_filter<'a>(
@@ -556,10 +553,7 @@ fn push_uuid_filter<'a>(
 }
 
 fn push_uuid_filter_tail<'a>(builder: &mut QueryBuilder<'a, Postgres>, values: &'a [Uuid]) {
-    builder.push(" IN (");
-    let mut separated = builder.separated(", ");
-    for value in values {
-        separated.push_bind(value);
-    }
-    separated.push_unseparated(")");
+    builder.push(" = ANY(");
+    builder.push_bind(values);
+    builder.push("::uuid[])");
 }
