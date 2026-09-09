@@ -795,6 +795,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Restore production release Cargo cache
+        id: release_cache
+        uses: actions/cache@v4
+        with:
+          path: target/docker-release-cache
+          key: docker-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: |
+            docker-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-
+
+      - name: Reuse production release Cargo cache in BuildKit
+        uses: reproducible-containers/buildkit-cache-dance@4b2444fec0c0fb9dbf175a96c094720a692ef810 # v2.1.4
+        with:
+          cache-source: target/docker-release-cache
+          cache-target: /build-cache
+          scratch-dir: target/docker-cache-dance
+          skip-extraction: ${{ steps.release_cache.outputs.cache-hit }}
+
       - name: Build exact production image
         id: shutdown_image
         uses: docker/build-push-action@v6
@@ -809,7 +826,7 @@ jobs:
           tags: bigname-api-shutdown:${{ github.sha }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
 
       - name: Prove exact-image API shutdown
         env:
