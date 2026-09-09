@@ -1,26 +1,49 @@
 workspace = "boringcache/benchmarks"
 
+[entries.cargo-registry-cache]
+tag = "bigname-full-ci-registry-cache"
+
+[entries.cargo-registry-index]
+tag = "bigname-full-ci-registry-index"
+
+[entries.cargo-git-db]
+tag = "bigname-full-ci-git-db"
+
 [entries.cargo-target]
 kind = "cargo-target"
-tag = "bigname-phase-runner-20260906-v2-target"
 path = "target"
+tag = "bigname-full-ci-target"
+exclude = ["bigname-e2e-*", "api-container-shutdown"]
 
-[entries.cargo-registry]
-tag = "bigname-phase-runner-20260906-v2-registry"
+[entries.foundry]
+path = "~/.foundry/cache"
+tag = "bigname-full-ci-foundry-1.7.1"
 
-[entries.cargo-git]
-tag = "bigname-phase-runner-20260906-v2-git"
+[entries.npm-cache]
+tag = "bigname-full-ci-npm"
+
+[profiles.dependencies]
+entries = ["cargo-registry-cache", "cargo-registry-index", "cargo-git-db"]
 
 [profiles.cargo]
-entries = ["cargo-target", "cargo-registry", "cargo-git"]
+entries = ["cargo-target"]
 
-[adapters.sccache]
-tag = "bigname-phase-runner-20260906-v2-compiler"
+[profiles.foundry]
+entries = ["foundry"]
+
+[profiles.npm]
+entries = ["npm-cache"]
 
 [adapters.cargo]
-tag = "bigname-phase-runner-20260906-v2"
 profiles = ["cargo"]
 compiler-cache = "sccache"
-command = ["cargo", "nextest", "run", "-p", "phase-runner", "-p", "bigname-ingest", "-p", "bigname-interpret", "-p", "bigname-content-hash", "-p", "bigname-benchmark-gate", "-p", "bigname-lookup", "-p", "bigname-project", "-p", "bigname-metrics", "--all-features", "--no-fail-fast", "--partition", "slice:1/3"]
 fail-on-cache-error = true
-metadata-hints = ["project=bigname", "workload=phase-runner-shard-1"]
+
+[adapters.sccache]
+tag = "bigname-full-ci-rust"
+
+[adapters.docker]
+command = ["docker", "buildx", "bake", "--file", ".github/docker-bake.hcl"]
+tag = "bigname-full-ci-docker"
+mount-cache = true
+fail-on-cache-error = true

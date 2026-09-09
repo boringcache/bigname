@@ -44,8 +44,19 @@ recorded as a separate pre-deploy step rather than entered in `_sqlx_migrations`
 
 ```sh
 cp .env.server.example .env.server
+# Set credentials, the image, a positive disk floor and an absolute probe path.
+# Complete the capacity preflight linked below before starting services.
 docker compose --env-file .env.server -f docker-compose.server.yml up -d
 ```
+
+Server Compose requires nonempty `BIGNAME_PHASE_RUNNER_MINIMUM_FREE_DISK_BYTES`
+and `BIGNAME_PHASE_RUNNER_WRITABLE_PATH`; missing or empty values fail rendering.
+Choose a positive reserve for the actual deployment, and pre-create a dedicated
+writable sibling on PostgreSQL's filesystem. The same absolute path is used on
+the Docker daemon host and inside the runner. Do not expose database files or
+change the existing PostgreSQL volume. Complete the [capacity preflight](runbooks/production-docker.md#capacity-preflight)
+for every active overlay before recreating the runner. A successful render alone
+does not prove filesystem identity, permissions or protection.
 
 Before the full `up`, apply reviewed versioned schema-migrations with the
 schema-migration runner — `sqlx migrate run --source migrations` from the
@@ -90,9 +101,22 @@ The implemented phases use:
 - `BIGNAME_PHASE_RUNNER_HYDRATION_RPC_URLS`
 - `BIGNAME_PHASE_RUNNER_INSTANCE_ID`
 - `BIGNAME_PHASE_RUNNER_INTERPRETER_STATE_CACHE_ENTRIES`
+- `BIGNAME_PHASE_RUNNER_MINIMUM_FREE_DISK_BYTES` — required server-Compose floor
+- `BIGNAME_PHASE_RUNNER_WRITABLE_PATH` — required server-Compose probe directory
+- `BIGNAME_PHASE_RUNNER_DATABASE_MAX_BYTES` — optional logical database ceiling
 - `BIGNAME_PHASE_RUNNER_METRICS_BIND_ADDR`
 - `BIGNAME_PHASE_RUNNER_REDO_METRICS_BIND_ADDR`
 - `BIGNAME_PHASE_RUNNER_HEARTBEAT_STALE_AFTER_SECS`
+
+An unset optional ceiling configures no limit; Docker inspection may show its bare
+variable name without `=`. An explicitly empty `KEY=` value is invalid.
+A configured ceiling must parse as an unsigned 64-bit integer; zero is a limit,
+not a way to disable it. The floor must also parse as an unsigned 64-bit integer.
+Operational admission rejects floor zero: Compose only enforces presence, and
+the unchanged CLI accepts zero. Direct CLI defaults remain floor zero, path `.`
+and no ceiling; the existing capacity poll interval remains five seconds.
+These settings are read at startup. Shell values override `--env-file`, so inspect
+both interpolation inputs and the effective service/container configuration.
 
 `BIGNAME_DATABASE_URL` is the writer credential. Supervised `run` and a
 `verify` redo also require
@@ -673,14 +697,12 @@ profiles and generated watch plans do not change, so no historical fetch or
 manifest-authority attestation is introduced. Deploy the new phase runner,
 complete the retained-range Interpret redo under the new interpreter content
 hash, run the stamped Project range, and evaluate the proof-scoped integrity
-assertions for the Mainnet ENS deployment profile before `publish::swap`. Only
-after that Project generation publishes may the matching API be deployed.
-Sepolia still selects a proven boundary and refuses ordinary unproven overlap
-per name, but its publication guardrail is deferred until
-[PR #852](https://github.com/ensdomains/bigname/pull/852), the #503 e2e harness,
-proves the connected Interpret→Project path;
-[issue #851](https://github.com/ensdomains/bigname/issues/851) tracks re-applying
-the guardrail.
+assertions for both configured ENS deployment profiles (Mainnet and Sepolia)
+before `publish::swap`. Only after that Project generation publishes may the
+matching API be deployed. Independent unproven Sepolia ENSv1/ENSv2 overlap
+remains a per-name refusal rather than a generation failure. The connected
+wrapped and locked publication prerequisite is recorded in
+[PR #852](https://github.com/ensdomains/bigname/pull/852).
 An interrupted walk resumes only from its existing exact phase
 [redo-marker scope](glossary.md#redo-marker-scope). Interpret separately
 validates the normalized arm-wide replay preimage, keeps its named replacement
@@ -740,3 +762,21 @@ including:
 The corresponding SQL migrations remain immutable history, followed by the
 append-only migration that drops their `public`-schema tables. Existing rows
 are not current readiness or replay authority during the planned transition.
+
+## API shutdown
+
+Unix API processes accept Ctrl-C and SIGTERM through the existing Axum graceful
+shutdown path. Non-Unix builds retain Ctrl-C only. Accepted signals stop fresh
+connections while accepted requests finish within their configured deadlines
+(defaults: 30-second request and 25-second SQL timeouts). Signal listener failures are errors, not
+accepted shutdown signals. The metrics listener has no new drain guarantee.
+
+Compose uses `BIGNAME_API_STOP_GRACE_MS` for both its stop grace and API startup
+validation, defaulting to 45000 (45 seconds). Startup rejects a request timeout
+that leaves less than 5000 ms of grace, before database connections or listeners.
+For a 60000 ms request timeout, use at least 65000 ms of grace. Direct launches
+without this optional budget retain their existing request-timeout behavior.
+External stop-timeout overrides must honor the same budget. This API-only
+slice is Part of #641: phase-runner SIGTERM, stop grace, batch settlement,
+heartbeat, restart, and redo behavior remain deferred. It does not authorize
+production rollout or complete the issue.

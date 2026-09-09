@@ -289,6 +289,13 @@ of the event that selected the current resolver pointer. Resolver binding
 summaries use that stored event provenance rather than a prior resolver row's
 classification.
 
+When a retained direct-registry authority first becomes name-addressable, its
+[`state-derived normalized event`](glossary.md#state-derived-normalized-event)
+of kind `SurfaceBound` carries the observed registry owner. The exact-name
+control summary exposes that owner, its registration authority context identifies
+the registry-only anchor, and the effective-controller address relation includes
+the owner; `control.status` remains null unless another selected authority event supplies it.
+
 ENSv1 wrapper lifecycle and fuse effects are projected from canonical wrapper
 facts. During registrar grace, the holder and lifecycle state remain visible,
 while owner modification, transfer, and effective-controller membership stop at
@@ -318,6 +325,13 @@ For the ENSv2 post-audit Sepolia deployment profile, declared exact-name rows
 come from the admitted registry and registrar families. Out-of-profile resolver,
 reverse, primary-name, mainnet, and execution behavior does not become exact-name
 truth.
+
+Within the selected ENSv2 registration lifecycle, `control.registry_owner`
+follows the latest canonical ownership event, including
+`TokenControlTransferred.to`. This represents the registry token's owner;
+role-only permission changes do not transfer it.[^owner-v2] Lifecycle and resource
+association still bound the eligible events. ENSv1 and Basenames retain their
+separate registry-owner and registrar-holder meanings.[^owner-v1][^owner-bn]
 
 For Basenames, exact-name truth comes from the admitted Base registry,
 registrar, and resolver families. Base primary-claim intake and L1 compatibility
@@ -468,6 +482,17 @@ summary is an authoritative permission enumeration. API contract tests inject
 an independently proven full summary to verify that resource-bound public
 requests are not globally forced to partial.
 
+When a registrar `Transfer` changes ENSv1 or Basenames authority between a
+registrar resource and a registry-only resource, `resource_control` and
+`resolver_control` for any selected nonzero resolver are revoked on the retiring
+registry-only resource or granted to its owner when it becomes active. An unchanged
+authority emits no additional registry-only balancing rows; ordinary token-holder permission rows remain unchanged.
+(upstream: .refs/ens_v1/contracts/registry/ENSRegistry.sol:L86-L95 @ ens_v1@91c966f)
+(upstream: .refs/ens_v1/contracts/ethregistrar/BaseRegistrarImplementation.sol:L171-L175 @ ens_v1@91c966f)
+(upstream: .refs/basenames/src/L2/Registry.sol:L46-L52 @ basenames@1809bbc)
+(upstream: .refs/basenames/src/L2/Registry.sol:L132-L134 @ basenames@1809bbc)
+(upstream: .refs/basenames/src/L2/BaseRegistrar.sol:L321-L329 @ basenames@1809bbc)
+
 When a state-derived ENSv2 path-expiry release remains the resource's terminal
 lifecycle event and retires effective permission rows, the resource summary
 keeps the selected registration-authority event's provenance unchanged.
@@ -560,10 +585,44 @@ follows the registry resolver lookup
 (upstream: .refs/ens_v1/contracts/registry/ENSRegistry.sol:L137 @ ens_v1@91c966f)
 and the resolver's version-, node-, and key-scoped text storage
 (upstream: .refs/ens_v1/contracts/resolvers/profiles/TextResolver.sol:L28 @ ens_v1@91c966f).
-A known model limitation remains: if a resolver was selected only before the
-[name surface](glossary.md#surface-name-surface) existed and was never selected
-again afterward, Project has no linked resolver pointer for that name and does
-not serve its retained records.
+When the first active ENSv1 [name surface](glossary.md#surface-name-surface) is
+materialized, Interpret links the latest replayed nonzero registry resolver to
+the current registry-only authority resource. If getter-visible registry
+ownership is explicitly zero, Interpret instead links that resolver to the
+retained registry [serving resource](glossary.md#serving-resource) without
+creating control. A latest zero-address
+resolver selection suppresses this materialization pointer rather than reviving
+an older nonzero selection. The original raw-derived normalized row remains
+immutable; the linked pointer is an additive
+[state-derived normalized event](glossary.md#state-derived-normalized-event) at
+the raw event that first materializes the active surface. A wrapper-provided
+surface links the retained registry read resource without binding that dormant
+registry resource while wrapper control remains current. Same-transaction
+registration reconciliation leaves that registry-read pointer on the dormant
+registry resource rather than retargeting it to registrar control. Record
+attribution remains node-keyed and provider-free. If a registrar registration
+makes the registrar resource current before the retained registry-only
+authority can be materialized, the same observation still marks that retained
+authority's surface known. A later registrar release can therefore restore the
+existing registry resource and its direct-registry owner instead of losing the
+known name.
+An old-registry resolver selection stops being eligible when either a
+current-registry `NewOwner` or `Transfer` creates that node's current-registry
+record. The ownership observation persists the
+[registry fallback handoff](glossary.md#registry-fallback-handoff) across replay;
+if the old pointer was already linked, later linked zero-resolver events
+retract it from every registry, registrar, or wrapper resource to which it was
+linked, including a resource from an authority epoch that ended before the
+handoff. An old-registry `Transfer` cannot clear a resolver
+selected from the current registry.
+The root resolver is the frozen exception: current-registry ownership does not
+retract its old-registry pointer or suppress later old-registry root updates.
+(upstream: .refs/ens_subgraph/src/ensRegistry.ts:L243-L248 @ ens_subgraph@723f1b6a)
+(upstream: .refs/ens_v1/contracts/registry/ENSRegistryWithFallback.sol:L18-L24 @ ens_v1@91c966f)
+(upstream: .refs/ens_v1/contracts/registry/ENSRegistry.sol:L60-L68 @ ens_v1@91c966f)
+(upstream: .refs/ens_v1/contracts/registry/ENSRegistry.sol:L75-L82 @ ens_v1@91c966f)
+(upstream: .refs/ens_v1/contracts/registry/ENSRegistryWithFallback.sol:L48-L54 @ ens_v1@91c966f)
+(upstream: .refs/ens_v1/contracts/registry/ENSRegistry.sol:L150-L172 @ ens_v1@91c966f)
 A resource-less record event cannot create a binding, and name and record reads
 expose the inventory only when the name's current readable control resource or
 `serving_resource_id` selects it. Resolver-local events are accepted only under the manifest and
@@ -581,12 +640,32 @@ default entry. ENSv1 `ContenthashChanged` normalized state uses
 `address_bytes_hex`, and `value_retained=false`, except that coin type 60 with
 an exactly 20-byte payload preserves the scalar `value` envelope used by the
 legacy `AddrChanged` event.
+(upstream: .refs/ens_v1/contracts/resolvers/profiles/AddrResolver.sol:L22-L24 @ ens_v1@91c966f) (upstream: .refs/ens_v1/contracts/resolvers/profiles/AddrResolver.sol:L47-L70 @ ens_v1@91c966f)
+(upstream: .refs/basenames/src/L2/resolver/AddrResolver.sol:L43-L66 @ basenames@1809bbc) (upstream: .refs/basenames/src/L2/resolver/AddrResolver.sol:L76-L82 @ basenames@1809bbc) (upstream: .refs/basenames/src/L2/resolver/AddrResolver.sol:L108-L110 @ basenames@1809bbc)
+(upstream: .refs/basenames/src/L2/resolver/AddrResolver.sol:L116-L121 @ basenames@1809bbc)
 Project reconstructs a retained contenthash entry as
 `value={"encoding":"hex","bytes":"0x..."}` and retains an address entry as
 scalar `value="0x..."`. An empty `contenthash_hex` or `address_bytes_hex`
 payload becomes an exact `not_found` entry with `value` omitted. The nested
 `value.bytes` address compatibility shape receives the same empty-value
 classification.
+
+Project classifies an exact 20-byte-zero `addr:60` as `not_found`, with `value` omitted, behind an
+ENSv1 registry, registrar, or wrapper resolver pointer, or a Basenames registry resolver pointer.
+This covers current scalar and retained nested `value.bytes` envelopes; other origins, types,
+nonempty lengths, and nonzero values remain stored successes. Project keeps the entry and selector, changes
+no raw facts or normalized events, and records selected nonempty exact absences in
+`provenance.exact_nonempty_not_found_record_keys`, a sorted, deduplicated array
+omitted when empty. Only the scoped zero20 predicate adds `addr:60`.
+Rust and SQL block default derivation only for a matching exact `addr:60`
+`not_found` entry. Orphan markers are ignored and exact successes still win.
+Empty or missing exact values retain permitted fallback. This private marker
+adds no read rule or authority; non-authoritative coverage remains unsupported.
+Marker-producing Project, both readers, and rebuilt rows must reach one
+maintainer-selected publication boundary before affected reads become public.
+(upstream: .refs/ens_v1/contracts/resolvers/profiles/AddrResolver.sol:L36-L40 @ ens_v1@91c966f)
+(upstream: .refs/ens_v1/contracts/resolvers/profiles/AddrResolver.sol:L81-L84 @ ens_v1@91c966f)
+(upstream: .refs/basenames/src/L2/resolver/AddrResolver.sol:L93-L99 @ basenames@1809bbc)
 
 Rows produced under an earlier [interpreter content
 hash](glossary.md#interpreter-content-hash) may retain the nested `value` object
@@ -736,3 +815,7 @@ new truth family.
 [^ensnode-legacy-text-l356]: (upstream: .refs/ensnode/packages/datasources/src/mainnet.ts:L356 @ ensnode@2017ae6) (upstream: .refs/ensnode/packages/datasources/src/mainnet.ts:L364 @ ensnode@2017ae6)
 [^ensnode-legacy-revresolver-l311]: (upstream: .refs/ensnode/packages/datasources/src/mainnet.ts:L311 @ ensnode@2017ae6)
 [^ensnode-legacy-revresolver-l316]: (upstream: .refs/ensnode/packages/datasources/src/mainnet.ts:L316 @ ensnode@2017ae6)
+
+[^owner-v2]: (upstream: .refs/ens_v2/contracts/src/registry/PermissionedRegistry.sol:L482 @ ens_v2@a971bd64) (upstream: .refs/ens_v2/contracts/src/registry/PermissionedRegistry.sol:L531 @ ens_v2@a971bd64)
+[^owner-v1]: (upstream: .refs/ens_v1/contracts/registry/ENSRegistry.sol:L123 @ ens_v1@91c966f) (upstream: .refs/ens_v1/contracts/ethregistrar/BaseRegistrarImplementation.sol:L71 @ ens_v1@91c966f) (upstream: .refs/ens_v1/contracts/ethregistrar/BaseRegistrarImplementation.sol:L172 @ ens_v1@91c966f)
+[^owner-bn]: (upstream: .refs/basenames/src/L2/Registry.sol:L165 @ basenames@1809bbc) (upstream: .refs/basenames/src/L2/BaseRegistrar.sol:L285 @ basenames@1809bbc) (upstream: .refs/basenames/src/L2/BaseRegistrar.sol:L321 @ basenames@1809bbc)

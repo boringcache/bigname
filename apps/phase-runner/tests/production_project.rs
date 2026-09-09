@@ -3671,26 +3671,20 @@ async fn a_basenames_child_publishes_under_its_own_authority_arm() -> Result<()>
     scratch.cleanup().await
 }
 
-// Sepolia selects the proven relation but does not run the Mainnet publication guardrail.
+// Sepolia applies the same proof-gated contradiction assertion as Mainnet.
 #[tokio::test]
-async fn a_sepolia_child_overlap_selects_without_blocking_publication() -> Result<()> {
+async fn a_sepolia_child_overlap_blocks_publication() -> Result<()> {
     let scratch = ScratchDatabase::create("production_project_child_sepolia").await?;
     seed_project_fixture(scratch.pool()).await?;
     seed_child_authority_fixture(scratch.pool(), 5, 3).await?;
     declare_sepolia_post_audit_profile(scratch.pool(), CHAIN).await?;
 
-    run_project_phase(scratch.pool(), CHAIN, 5).await?;
-    assert_eq!(
-        child_relation(scratch.pool()).await?,
-        Some((None, Some(OWNER.to_owned()))),
-        "Sepolia still selects the proven ENSv2 relation"
-    );
-    assert!(
-        generation_failure_rows(scratch.pool(), CHAIN)
-            .await?
-            .is_empty(),
-        "Sepolia records no publication-blocking failure"
-    );
+    run_project_phase(scratch.pool(), CHAIN, 5)
+        .await
+        .expect_err("the proven Sepolia child contradiction must not publish");
+    let rows = generation_failure_rows(scratch.pool(), CHAIN).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].3, DUAL_CURRENT_CHILD_AUTHORITY);
     scratch.cleanup().await
 }
 
@@ -7446,6 +7440,94 @@ async fn record_inventory_normalizes_empty_address_shapes_and_coin60_siblings() 
         nonempty["value"],
         json!({"encoding":"hex","bytes":"0x1234"})
     );
+    scratch.cleanup().await
+}
+
+#[tokio::test]
+async fn record_inventory_normalizes_a_cleared_contenthash_in_the_nested_value_shape() -> Result<()>
+{
+    let scratch = ScratchDatabase::create("production_project_empty_contenthash_shape").await?;
+    seed_project_fixture(scratch.pool()).await?;
+    for after_state in [
+        json!({
+            "resolver":RESOLVER,
+            "source_event":"ContenthashChanged",
+            "record_key":"contenthash",
+            "record_family":"contenthash",
+            "value":{"encoding":"hex","bytes":"0xe3010170122011"}
+        }),
+        json!({
+            "resolver":RESOLVER,
+            "source_event":"ContenthashChanged",
+            "record_key":"contenthash",
+            "record_family":"contenthash",
+            "value":{"encoding":"hex","bytes":"0x"}
+        }),
+        json!({
+            "resolver":RESOLVER,
+            "source_event":"TextChanged",
+            "record_key":"text:url",
+            "record_family":"text",
+            "selector_key":"url",
+            "value":"https://example.invalid"
+        }),
+    ] {
+        insert_event(
+            scratch.pool(),
+            CHAIN,
+            3,
+            Some("ens:0xalice"),
+            Some(RESOURCE),
+            "RecordChanged",
+            "ens_v1_resolver_l1",
+            after_state,
+            json!({"emitting_address":RESOLVER}),
+        )
+        .await?;
+    }
+    // Order the set before the clear so the retained entry is the cleared one.
+    sqlx::query(
+        "UPDATE normalized_events
+         SET transaction_index = 0,
+             transaction_hash = '0xcontenthashclear',
+             log_index = CASE
+                 WHEN after_state #>> '{value,bytes}' = '0x' THEN 11
+                 ELSE 10
+             END
+         WHERE chain_id = $1
+           AND block_number = 3
+           AND after_state ->> 'record_key' = 'contenthash'",
+    )
+    .bind(CHAIN)
+    .execute(scratch.pool())
+    .await?;
+
+    run_project(scratch.pool(), CHAIN, None, RunMode::Normal, 0, 3).await?;
+    let entries: Value =
+        sqlx::query_scalar("SELECT entries FROM record_inventory_current WHERE resource_id = $1")
+            .bind(Uuid::parse_str(RESOURCE)?)
+            .fetch_one(scratch.pool())
+            .await?;
+    let contenthash = entries
+        .as_array()
+        .expect("entries array")
+        .iter()
+        .find(|entry| entry["record_key"] == "contenthash")
+        .expect("missing contenthash");
+    assert_eq!(contenthash["status"], json!("not_found"));
+    assert!(
+        contenthash.get("value").is_none(),
+        "cleared contenthash retained a value"
+    );
+    // The empty-value normalization is scoped to contenthash and addr; a text
+    // record on the same resource must still publish its value.
+    let text = entries
+        .as_array()
+        .expect("entries array")
+        .iter()
+        .find(|entry| entry["record_key"] == "text:url")
+        .expect("missing text:url");
+    assert_eq!(text["status"], json!("success"));
     scratch.cleanup().await
 }
 
@@ -13706,8 +13788,8 @@ async fn assert_registrar_transfer_matches_full_rebuild(
             .await?;
     }
 
-    let resolver_permissions: Vec<(Value, Value, String, Option<String>)> = sqlx::query_as(
-        "SELECT before_state, after_state, source_family,
+    let resolver_permissions: Vec<(Uuid, Value, Value, String, Option<String>)> = sqlx::query_as(
+        "SELECT resource_id, before_state, after_state, source_family,
                 raw_fact_ref ->> 'emitting_address'
          FROM normalized_events
          WHERE chain_id = $1 AND block_number = 5
@@ -13724,41 +13806,51 @@ async fn assert_registrar_transfer_matches_full_rebuild(
     assert_eq!(
         resolver_permissions.len(),
         2,
-        "transfer must emit one resolver revoke and one resolver grant"
+        "authority change must emit one resolver revoke and one resolver grant"
     );
-    assert!(resolver_permissions.iter().all(|(_, _, family, emitter)| {
-        family == "basenames_base_registrar" && emitter.as_deref() == Some(REGISTRAR)
-    }));
+    assert!(
+        resolver_permissions
+            .iter()
+            .all(|(_, _, _, family, emitter)| {
+                family == "basenames_base_registrar" && emitter.as_deref() == Some(REGISTRAR)
+            })
+    );
     let revoke = resolver_permissions
         .iter()
-        .find(|(before, _, _, _)| before.pointer("/subject").and_then(Value::as_str) == Some(OWNER))
-        .expect("old-owner resolver revoke");
+        .find(|(_, before, _, _, _)| {
+            before.pointer("/subject").and_then(Value::as_str) == Some(OWNER)
+        })
+        .expect("old-authority resolver revoke");
     assert_eq!(
-        revoke.0.pointer("/scope/resolver_address"),
+        revoke.1.pointer("/scope/resolver_address"),
         Some(&json!(RESOLVER))
     );
-    assert_eq!(
-        revoke.0.pointer("/effective_powers"),
-        Some(&json!(["resolver_control"]))
-    );
+    assert_eq!(revoke.1["effective_powers"], json!(["resolver_control"]));
+    assert_eq!(revoke.2["effective_powers"], json!([]));
+    let expected_grantee = if include_registry_owner {
+        OWNER
+    } else {
+        TRANSFER_OWNER
+    };
     let grant = resolver_permissions
         .iter()
-        .find(|(_, after, _, _)| {
-            after.pointer("/subject").and_then(Value::as_str) == Some(TRANSFER_OWNER)
+        .find(|(_, _, after, _, _)| {
+            after.pointer("/subject").and_then(Value::as_str) == Some(expected_grantee)
+                && after["effective_powers"] == json!(["resolver_control"])
         })
-        .expect("new-owner resolver grant");
+        .expect("new-authority resolver grant");
     assert_eq!(
-        grant.1.pointer("/scope/resolver_address"),
+        grant.2.pointer("/scope/resolver_address"),
         Some(&json!(RESOLVER))
     );
     assert_eq!(
-        grant.1.pointer("/grant_source/source_event_kind"),
+        grant.2.pointer("/grant_source/source_event_kind"),
         Some(&json!("TokenControlTransferred"))
     );
-    assert!(resolver_permissions.iter().all(|(before, after, _, _)| {
+    assert_eq!(revoke.0 == grant.0, !include_registry_owner);
+    assert!(resolver_permissions.iter().all(|(_, before, after, _, _)| {
         before.get("resolver").is_none() && after.get("resolver").is_none()
     }));
-
     let surface_event_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM normalized_events
          WHERE chain_id = $1 AND block_number = 5
@@ -13810,22 +13902,35 @@ async fn assert_registrar_transfer_matches_full_rebuild(
     run_project(full.pool(), chain, None, RunMode::Normal, 0, 5).await?;
 
     for pool in [incremental.pool(), full.pool()] {
-        let current_permission: (String, Option<String>) = sqlx::query_as(
-            "SELECT subject, grant_source ->> 'source_event_kind'
+        let current_permission: (Uuid, String, Option<String>, bool) = sqlx::query_as(
+            "SELECT resource_id, subject, grant_source ->> 'source_event_kind', (NOT EXISTS (
+                 SELECT 1 FROM permissions_current retired WHERE retired.resource_id = $2
+                   AND lower(retired.subject) = lower($3)
+                   AND retired.effective_powers ? 'resource_control') AND EXISTS (
+                 SELECT 1 FROM permissions_current active
+                 WHERE active.resource_id = permissions_current.resource_id
+                   AND lower(active.subject) = lower(permissions_current.subject)
+                   AND active.effective_powers ? 'resource_control'))
              FROM permissions_current
              WHERE scope_kind = 'resolver'
+               AND resource_id = (
+                   SELECT resource_id FROM name_current
+                   WHERE raw_name = 'alice.base.eth'
+               )
                AND lower(scope_detail ->> 'resolver_address') = lower($1)",
         )
         .bind(RESOLVER)
+        .bind(revoke.0)
+        .bind(OWNER)
         .fetch_one(pool)
         .await?;
-        assert_eq!(
-            current_permission,
-            (
-                TRANSFER_OWNER.into(),
-                Some("TokenControlTransferred".into())
-            )
+        let expected_permission = (
+            grant.0,
+            expected_grantee.into(),
+            Some("TokenControlTransferred".into()),
+            true,
         );
+        assert_eq!(current_permission, expected_permission);
     }
 
     let incremental_resolver = resolver_permission_summary(incremental.pool(), chain).await?;
@@ -13833,7 +13938,7 @@ async fn assert_registrar_transfer_matches_full_rebuild(
     for summary in [&incremental_resolver, &full_resolver] {
         assert_eq!(
             summary.pointer("/permissions/items/0/subject"),
-            Some(&json!(TRANSFER_OWNER))
+            Some(&json!(expected_grantee))
         );
         assert_eq!(
             summary.pointer("/permissions/items/0/grant_source/source_event_kind"),
@@ -13841,7 +13946,7 @@ async fn assert_registrar_transfer_matches_full_rebuild(
         );
         assert_eq!(
             summary.pointer("/role_holders/items/0/subject"),
-            Some(&json!(TRANSFER_OWNER))
+            Some(&json!(expected_grantee))
         );
     }
 
@@ -19766,7 +19871,7 @@ async fn a_closed_predecessor_publishes_on_mainnet_without_an_audit_row() -> Res
 }
 
 #[tokio::test]
-async fn sepolia_profile_publishes_the_same_proven_dual_current_corpus() -> Result<()> {
+async fn sepolia_profile_blocks_the_same_proven_dual_current_corpus() -> Result<()> {
     let scratch = ScratchDatabase::create("project_dual_current_sepolia").await?;
     let chain = "project-dual-current-sepolia";
     let logical_name_id = seed_dual_open_cross_arm_fixture(scratch.pool(), chain, 4).await?;
@@ -19780,23 +19885,23 @@ async fn sepolia_profile_publishes_the_same_proven_dual_current_corpus() -> Resu
             mode: InterpretRunMode::Normal,
         })
         .await?;
-    insert_activated_authority_proof(scratch.pool(), chain, &logical_name_id, "unwrapped", None)
-        .await?;
+    // Construct this proof row as a pre-Project fixture.
+    // Connected activation is exercised by the #852 e2e scenarios.
+    insert_activated_authority_proof(
+        scratch.pool(),
+        chain,
+        &logical_name_id,
+        "unlocked_wrapped",
+        None,
+    )
+    .await?;
 
-    run_project_phase(scratch.pool(), chain, 5).await?;
-
-    let published: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM name_current WHERE logical_name_id = $1")
-            .bind(&logical_name_id)
-            .fetch_one(scratch.pool())
-            .await?;
-    assert_eq!(published, 1, "Sepolia keeps selecting past the boundary");
-    assert!(
-        generation_failure_rows(scratch.pool(), chain)
-            .await?
-            .is_empty(),
-        "the assertion is Mainnet-scoped"
-    );
+    run_project_phase(scratch.pool(), chain, 5)
+        .await
+        .expect_err("the proven Sepolia exact-name contradiction must not publish");
+    let rows = generation_failure_rows(scratch.pool(), chain).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].3, DUAL_CURRENT_EXACT_NAME_AUTHORITY);
 
     scratch.cleanup().await
 }
@@ -23865,10 +23970,11 @@ async fn seed_closed_predecessor_cross_arm_fixture(
 
 // An inert manifest whose deployment epoch makes Project classify the chain
 // under the [Sepolia deployment profile](../../../docs/glossary.md#deployment-profile).
-// Selector-only fixtures normally seed the intended closed-predecessor state;
-// dedicated Sepolia tests retain both arms to pin publication without the
-// Mainnet guardrail. Declare this before the first projection so a
-// deployment-profile-sensitive field cannot change mid-test.
+// A proven boundary with both authority arms still open is unpublishable on
+// every ENS deployment profile, so selector-only fixtures seed the closed
+// predecessor state that production Interpret writes. Declare this before the
+// first projection so a deployment-profile-sensitive field cannot change
+// mid-test.
 async fn declare_sepolia_post_audit_profile(pool: &PgPool, chain: &str) -> Result<()> {
     insert_namespaced_manifest(
         pool,

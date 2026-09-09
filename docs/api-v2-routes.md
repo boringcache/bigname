@@ -104,7 +104,18 @@ may consequently enter name-filtered diagnostics and product history. An
 outstanding cursor has no continuation guarantee across this behavior-changing
 boundary and may be rejected. Consumers must discard pre-#348/#529 cursors and
 restart from the first page; fresh post-publication cursors continue normally.
-This boundary does not claim fresh/resumed parity for the known pre-existing
+
+The [#613](https://github.com/ensdomains/bigname/issues/613) interpreter change
+keeps the original [pre-surface](glossary.md#pre-surface) ENSv1 registry `ResolverChanged` row unchanged,
+then adds a name- and resource-linked, [state-derived](glossary.md#state-derived-normalized-event) `ResolverChanged` when the
+first active [name surface](glossary.md#surface-name-surface) is learned. Product
+events or name history may therefore gain one historical resolver row, while
+diagnostics may gain each linked resource copy. A cursor issued before this
+change has no continuation guarantee and may be rejected. Consumers must
+discard pre-#613 cursors and restart from the first page; fresh post-publication
+cursors continue normally.
+
+These boundaries do not claim fresh/resumed parity for the known pre-existing
 exception: when a resolver-emitted resource equals `namehash(N)`,
 named-resource and alias preimages can share one retained [interpreter state
 key](glossary.md#interpreter-state-key), so resumed interpretation can lose the
@@ -622,7 +633,26 @@ Field ownership:
   recurses. A derived answer is normalized through the requested getter's
   verified decode: for coin type `60`, a 20-byte zero default becomes derived
   `not_found`; for EVM-range multicoin selectors, the same non-empty bytes remain
-  an `ok` value. Exact stored records keep their existing behavior. Other
+  an `ok` value. Exact stored records retain their stored value except that an
+  ENSv1 or Basenames `addr:60` value of exactly 20 zero bytes is normalized to `not_found`
+  before this derived rule runs. That covers an `AddressChanged(node,60,...)` payload of 20 zero
+  bytes and a retained
+  legacy-only normalized `AddrChanged(node,address(0))` behind an ENSv1 registry, registrar,
+  or wrapper resolver pointer, or a Basenames registry resolver pointer. ENSv2-origin
+  attribution, another coin type, another nonempty byte length, and nonzero addresses retain
+  their values. The exact entry remains but omits `value`. Indexed and auto
+  retain exact `not_found` even when an authorized nonzero default exists;
+  verified returns the same absence. `addresses["60"]`, `primary_address`, and
+  default derivation metadata remain absent. Empty or missing exact data keeps
+  permitted fallback. The private observation marker and inventory provenance
+  do not appear in product responses or record diagnostics.
+  (upstream: .refs/ens_v1/contracts/resolvers/profiles/AddrResolver.sol:L22-L24 @ ens_v1@91c966f) (upstream: .refs/ens_v1/contracts/resolvers/profiles/AddrResolver.sol:L47-L70 @ ens_v1@91c966f)
+  (upstream: .refs/ens_v1/contracts/resolvers/profiles/AddrResolver.sol:L36-L40 @ ens_v1@91c966f)
+  (upstream: .refs/ens_v1/contracts/resolvers/profiles/AddrResolver.sol:L81-L84 @ ens_v1@91c966f)
+  (upstream: .refs/basenames/src/L2/resolver/AddrResolver.sol:L43-L66 @ basenames@1809bbc) (upstream: .refs/basenames/src/L2/resolver/AddrResolver.sol:L76-L82 @ basenames@1809bbc) (upstream: .refs/basenames/src/L2/resolver/AddrResolver.sol:L108-L110 @ basenames@1809bbc)
+  (upstream: .refs/basenames/src/L2/resolver/AddrResolver.sol:L93-L99 @ basenames@1809bbc)
+  (upstream: .refs/basenames/src/L2/resolver/AddrResolver.sol:L116-L121 @ basenames@1809bbc)
+  Other
   default-source `ok` values yield the requested-key value, while authoritative
   absence yields derived `not_found`. An unsupported or
   non-authoritative source leaves auto unsatisfied and triggers ordinary
@@ -653,12 +683,11 @@ Field ownership:
   and the resolver's version-, node-, and key-scoped text storage
   (upstream: .refs/ens_v1/contracts/resolvers/profiles/TextResolver.sol:L28 @ ens_v1@91c966f).
   Once that inventory exists, a key's absence is therefore absence from the
-  retained attributable history rather than an unfinished build. The known
-  case documented in [`projections.md`](projections.md#resolver-and-records),
-  where resolver selection predates the
-  [name surface](glossary.md#surface-name-surface) and is never repeated,
-  produces no inventory instead of treating an interpretation-time linking gap
-  as authoritative absence. The row's
+  retained attributable history rather than an unfinished build. When an
+  ENSv1 registry resolver selection predates the
+  [name surface](glossary.md#surface-name-surface), first-surface
+  materialization supplies the linked pointer without requiring a repeated
+  selection; a latest zero-address selection remains a clear. The row's
   `exhaustiveness: not_asserted` disclaims a claim about complete *history*,
   which is a weaker statement than `full` and does not weaken this admission.
   Node-keyed `ens_v1_resolver_l1` records written before the name surface
@@ -725,12 +754,6 @@ Field ownership:
   state is unregistered. Indexed reads use the [serving resource](glossary.md#serving-resource)'s inventory, verified reads select
   the surviving resolver, and `source=auto` follows the ordinary indexed/verified blend. Owner zero
   or registry-self alone therefore does not produce `inventory_not_available`.
-  When current authority is projected but inventory is missing because resolver
-  selection predates the [name surface](glossary.md#surface-name-surface) and
-  was never repeated, `source=indexed` reports requested keys as
-  `status=unsupported` with `inventory_not_available`. `source=auto` follows
-  its ordinary verified-lookup fallback rules when that execution path is
-  available.
   Direct verified lookup compares against the same exact-or-derived indexed
   evaluator before the guarded resolution-divergence-ledger write. Agreement
   can therefore clear an older exact-key false miss; provider output remains
@@ -829,8 +852,9 @@ to the product and record-diagnostic routes; a family outside it is rejected as
   [authority arm](glossary.md#authority-epoch) still chooses between the remaining ENSv1 and ENSv2 candidates.
   An unknown activated migration-path value blocks the Project generation as a
   data-integrity failure instead of silently hiding relations. A child whose
-  arms disagree with no authority proof is omitted entirely. On Mainnet, an
-  ENSv1 relation that survives parent reachability and
+  arms disagree with no authority proof is omitted entirely. On every ENS
+  [deployment profile](glossary.md#deployment-profile) (Mainnet and Sepolia), an ENSv1 relation that survives
+  parent reachability and
   was asserted after a proven ENSv2 child authority began blocks Project
   publication for that generation,
   though a positive ENSv2 registration in a locked parent's migration registry
@@ -839,9 +863,6 @@ to the product and record-diagnostic routes; a family outside it is rejected as
   an unmigrated parent can expose this contradiction, but no ordinary on-chain
   parent-and-child ENSv1→ENSv2 shape reaches it after parent reachability and
   migration-registry history are applied.
-  Sepolia publishes the proof-selected child relation; extending the
-  publication guardrail there is deferred until the connected Interpret→Project
-  path is proven.
   (upstream: .refs/ens_v2/contracts/src/migration/LockedWrapperReceiver.sol:L146-L164 @ ens_v2@a971bd64)
   (upstream: .refs/ens_v2/contracts/src/registry/WrapperRegistry.sol:L293-L307 @ ens_v2@a971bd64)
   This route therefore never chooses one
@@ -907,7 +928,8 @@ to the product and record-diagnostic routes; a family outside it is rejected as
   requested name, and `scope=both` reads both sets. `scope` defaults to `both`.
   A V1 ownerless row linked only to the registry resource retained for reads is
   visible through name history with `registration_id=null` when it carries the
-  name's `logical_name_id`. Name history returns a pre-surface owner row on a
+  name's `logical_name_id`. Name history returns a
+  [pre-surface](glossary.md#pre-surface) owner row on a
   registry resource that was ever bound to the name under `scope=both` or
   `scope=registration`, even when the row was stored before the
   [name surface](glossary.md#surface-name-surface) existed and carries no name
