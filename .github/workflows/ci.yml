@@ -762,6 +762,9 @@ jobs:
       - name: Run e2e shard 1/2
         run: tests/e2e/run-gate
 
+      - name: Report compiler cache storage
+        run: boringcache check boringcache/benchmarks bigname-full-ci-rust --json
+
   e2e_shard_2:
     name: test (e2e shard 2/2)
     permissions:
@@ -864,6 +867,9 @@ jobs:
 
       - name: Run e2e shard 2/2
         run: tests/e2e/run-gate
+
+      - name: Report compiler cache storage
+        run: boringcache check boringcache/benchmarks bigname-full-ci-rust --json
 
   api_container_shutdown:
     name: test (API container shutdown)
