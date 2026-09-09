@@ -23,10 +23,10 @@ tag = "bigname-full-ci-foundry-1.7.1"
 tag = "bigname-full-ci-npm"
 
 [profiles.dependencies]
-entries = ["cargo-registry-cache", "cargo-registry-index", "cargo-git-db"]
+entries = ["cargo-registry-cache", "cargo-registry-index"]
 
 [profiles.cargo]
-entries = ["cargo-target"]
+entries = ["cargo-target", "cargo-git-db"]
 
 [profiles.foundry]
 entries = ["foundry"]
@@ -46,4 +46,5 @@ tag = "bigname-full-ci-rust"
 command = ["docker", "buildx", "bake", "--file", ".github/docker-bake.hcl"]
 tag = "bigname-full-ci-docker"
 mount-cache = true
+tool-cache = ["sccache:bigname-full-ci-docker-rust"]
 fail-on-cache-error = true

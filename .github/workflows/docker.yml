@@ -6,6 +6,10 @@ on:
       - boringcache-validation
   workflow_dispatch:
     inputs:
+      compare:
+        description: Compare upstream Docker caching with BoringCache on adjacent source commits
+        type: boolean
+        default: false
       cli_version:
         description: Optional exact BoringCache CLI release
         type: string
@@ -26,7 +30,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: docker-publish
+  group: docker-${{ inputs.compare && 'cache-validation' || 'publish' }}
   cancel-in-progress: false
 
 env:
@@ -36,7 +40,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && !inputs.compare) ||
       (github.event_name == 'push' && github.repository == 'boringcache/bigname') ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
@@ -92,4 +96,103 @@ jobs:
 
       - name: Report compiler cache storage
         if: github.repository == 'boringcache/bigname'
-        run: boringcache check boringcache/benchmarks bigname-full-ci-rust --json
+        run: boringcache check boringcache/benchmarks bigname-full-ci-docker-rust --json
+
+  seed:
+    if: github.event_name == 'workflow_dispatch' && inputs.compare
+    name: ${{ matrix.provider }} Docker seed
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [GitHub, BoringCache]
+    env:
+      IMAGE_NAME: bigname-validation
+      SOURCE_URL: https://github.com/ensdomains/bigname
+      PUBLISH_IMAGE: "false"
+      SOURCE_SHA: 25c791981ac957ae834b72308d0836076695f0ae
+    steps: &build_steps
+      - name: Checkout validation configuration
+        uses: actions/checkout@v4
+        with:
+          path: validation
+          persist-credentials: false
+
+      - name: Checkout pinned upstream source
+        uses: actions/checkout@v4
+        with:
+          repository: ensdomains/bigname
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+
+      - name: Record source and runner
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git log -1 --format='source_sha=%H tree=%T subject=%s'
+          uname -m
+          nproc
+          free -h
+
+      - name: Apply BoringCache Docker integration
+        if: matrix.provider == 'BoringCache'
+        run: |
+          cp validation/Dockerfile source/Dockerfile
+          cp validation/.github/docker-bake.hcl source/.github/docker-bake.hcl
+          cp validation/.github/docker-validation.toml source/.boringcache.toml
+
+      - name: Set up upstream Docker builder
+        if: matrix.provider == 'GitHub'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build with upstream GitHub layer cache
+        if: matrix.provider == 'GitHub'
+        uses: docker/build-push-action@v6
+        with:
+          context: source
+          file: source/Dockerfile
+          load: true
+          platforms: linux/amd64
+          build-args: |
+            RUST_VERSION=${{ env.RUST_VERSION }}
+            BIGNAME_BUILD_SHA=${{ env.SOURCE_SHA }}
+          tags: bigname-validation:latest
+          labels: |
+            org.opencontainers.image.source=${{ env.SOURCE_URL }}
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+          cache-from: type=gha,scope=bigname-docker-validation-20260909
+          cache-to: type=gha,scope=bigname-docker-validation-20260909,mode=max
+
+      - name: Build with BoringCache layers, mounts and sccache
+        if: matrix.provider == 'BoringCache'
+        uses: boringcache/one@404b744a2053da4cf963f13f615f7fafe94f3cf7 # v1.30.1
+        with:
+          cli-version: ${{ inputs.cli_version }}
+          working-directory: source
+          mode: docker
+          trust-policy: publish
+          fail-on-cache-error: true
+
+      - name: Verify application binaries
+        run: |
+          docker run --rm --entrypoint bigname-api bigname-validation:latest --help
+          docker run --rm --entrypoint phase-runner bigname-validation:latest --help
+          docker image inspect bigname-validation:latest --format '{{json .Config.Labels}}'
+
+  commit:
+    name: ${{ matrix.provider }} Docker changed source
+    needs: seed
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [GitHub, BoringCache]
+    env:
+      IMAGE_NAME: bigname-validation
+      SOURCE_URL: https://github.com/ensdomains/bigname
+      PUBLISH_IMAGE: "false"
+      SOURCE_SHA: 5b8fbcfdc1163a45fb262b8839c4e14d772aafed
+    steps: *build_steps

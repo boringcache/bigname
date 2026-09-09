@@ -1,0 +1,9 @@
+workspace = "boringcache/benchmarks"
+
+[adapters.docker]
+command = ["docker", "buildx", "bake", "--file", ".github/docker-bake.hcl"]
+tag = "bigname-docker-composed-validation-20260909"
+no-git = true
+mount-cache = true
+tool-cache = ["sccache:bigname-docker-composed-rust-20260909"]
+fail-on-cache-error = true
