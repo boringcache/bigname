@@ -89,3 +89,7 @@ jobs:
           IMAGE: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}
         run: |
           docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'test -x /usr/local/bin/bigname-api && test -x /usr/local/bin/phase-runner'
+
+      - name: Report compiler cache storage
+        if: github.repository == 'boringcache/bigname'
+        run: boringcache check boringcache/benchmarks bigname-full-ci-rust --json
