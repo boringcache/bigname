@@ -682,7 +682,18 @@ jobs:
           echo "BIGNAME_E2E_CANONICAL_PHASE_RUNNER=$artifact_dir/phase-runner" >>"$GITHUB_ENV"
 
       - name: Run e2e shard ${{ matrix.shard }}/4
+        env:
+          BIGNAME_E2E_SHUTDOWN_EVIDENCE: ${{ runner.temp }}/native-api-shutdown
         run: tests/e2e/run-gate
+
+      - name: Retain native API shutdown evidence
+        if: ${{ always() && matrix.shard == 3 }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-api-shutdown
+          path: ${{ runner.temp }}/native-api-shutdown
+          if-no-files-found: warn
+          retention-days: 3
 
   production_image:
     name: build (production image)
