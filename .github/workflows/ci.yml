@@ -631,17 +631,45 @@ jobs:
           cache-workspace-crates: false
           save-if: false
 
+      - name: Wait before a second dependency-cache restore
+        if: ${{ steps.phase_runner_cache.outputs.cache-hit != 'true' }}
+        run: |
+          echo "No exact dependency-cache hit; waiting 30 seconds before one more restore."
+          sleep 30
+
+      - name: Retry e2e phase-runner dependency-cache restore
+        id: phase_runner_cache_retry
+        if: ${{ steps.phase_runner_cache.outputs.cache-hit != 'true' }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ${{ steps.phase_runner_cache_key.outputs.prefix }}
+          shared-key: phase-runner
+          add-job-id-key: false
+          add-rust-environment-hash-key: false
+          workspaces: ". -> target"
+          cache-workspace-crates: false
+          save-if: false
+
       - name: Report phase-runner dependency cache
         env:
-          CACHE_HIT: ${{ steps.phase_runner_cache.outputs.cache-hit }}
+          FIRST_CACHE_HIT: ${{ steps.phase_runner_cache.outputs.cache-hit }}
+          RETRY_CACHE_HIT: ${{ steps.phase_runner_cache_retry.outputs.cache-hit }}
+          RETRY_OUTCOME: ${{ steps.phase_runner_cache_retry.outcome }}
+          CACHE_HIT: ${{ steps.phase_runner_cache.outputs.cache-hit == 'true' || steps.phase_runner_cache_retry.outputs.cache-hit == 'true' }}
           CACHE_PRIMARY_KEY: ${{ steps.phase_runner_cache_key.outputs.primary }}
         run: |
           echo "phase-runner dependency-cache primary key: $CACHE_PRIMARY_KEY"
+          echo "phase-runner dependency-cache first hit: $FIRST_CACHE_HIT"
+          echo "phase-runner dependency-cache retry outcome: $RETRY_OUTCOME"
+          echo "phase-runner dependency-cache retry hit: $RETRY_CACHE_HIT"
           echo "phase-runner dependency-cache hit: $CACHE_HIT"
           {
             echo "### phase-runner dependency cache"
             echo
             echo "- Primary key: \`$CACHE_PRIMARY_KEY\`"
+            echo "- First exact hit: \`$FIRST_CACHE_HIT\`"
+            echo "- Retry outcome: \`$RETRY_OUTCOME\`"
+            echo "- Retry exact hit: \`$RETRY_CACHE_HIT\`"
             echo "- Exact hit: \`$CACHE_HIT\`"
           } >>"$GITHUB_STEP_SUMMARY"
 

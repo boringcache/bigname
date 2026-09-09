@@ -35,9 +35,9 @@ scripts/test-db -- cargo test --manifest-path tests/e2e/Cargo.toml --locked -- -
 ```
 
 The default gate requires the exact library-test summary `92 passed; 0 failed;
-3 ignored; 0 filtered out`. CI shard 1 requires `46 passed; 0 failed; 2
-ignored; 47 filtered out`, and shard 2 requires `46 passed; 0 failed; 1
-ignored; 48 filtered out`. The gate checks both Cargo's exit status and every
+3 ignored; 0 filtered out`. CI shards 1, 2, and 3 each require `23 passed; 0
+failed; 1 ignored; 71 filtered out`; shard 4 requires `23 passed; 0 failed; 0
+ignored; 72 filtered out`. The gate checks both Cargo's exit status and every
 summary count, so a prematurely successful process or an incorrectly filtered
 suite cannot satisfy CI.
 
