@@ -668,8 +668,7 @@ jobs:
     timeout-minutes: 25
     needs:
       - e2e_build
-      - phase_runner_shard_1
-    # Order after the cache producer without gating on it, preserving independent e2e signal on red runs.
+    # Start after the artifact and cache build; e2e results remain independently aggregated.
     if: ${{ !cancelled() && needs.e2e_build.result == 'success' }}
     services:
       postgres:
@@ -774,8 +773,7 @@ jobs:
     timeout-minutes: 25
     needs:
       - e2e_build
-      - phase_runner_shard_1
-    # Order after the cache producer without gating on it, preserving independent e2e signal on red runs.
+    # Start after the artifact and cache build; e2e results remain independently aggregated.
     if: ${{ !cancelled() && needs.e2e_build.result == 'success' }}
     services:
       postgres:
