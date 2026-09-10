@@ -13,7 +13,7 @@ tag = "bigname-full-ci-git-db"
 kind = "cargo-target"
 path = "target"
 tag = "bigname-full-ci-target"
-exclude = ["bigname-e2e-*", "api-container-shutdown"]
+exclude = ["bigname-e2e-*", "bigname-image-*", "api-container-shutdown"]
 
 [entries.foundry]
 path = "~/.foundry/cache"
@@ -43,7 +43,7 @@ fail-on-cache-error = true
 tag = "bigname-full-ci-rust"
 
 [adapters.docker]
-command = ["docker", "buildx", "bake", "--file", ".github/docker-bake.hcl"]
+command = ["docker", "buildx", "bake", "--file", ".github/docker-bake.hcl", "--metadata-file", "target/production-build.json"]
 tag = "bigname-full-ci-docker"
 mount-cache = true
 tool-cache = ["sccache:bigname-full-ci-docker-rust"]
