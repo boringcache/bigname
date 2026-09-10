@@ -1,0 +1,50 @@
+workspace = "boringcache/benchmarks"
+
+[entries.cargo-registry-cache]
+tag = "bigname-pr890-20260910-registry-cache"
+
+[entries.cargo-registry-index]
+tag = "bigname-pr890-20260910-registry-index"
+
+[entries.cargo-git-db]
+tag = "bigname-pr890-20260910-git-db"
+
+[entries.cargo-target]
+kind = "cargo-target"
+path = "target"
+tag = "bigname-pr890-20260910-target"
+exclude = ["bigname-e2e-*", "bigname-image-*", "api-container-shutdown"]
+
+[entries.foundry]
+path = "~/.foundry/cache"
+tag = "bigname-pr890-20260910-foundry-1.7.1"
+
+[entries.npm-cache]
+tag = "bigname-pr890-20260910-npm"
+
+[profiles.dependencies]
+entries = ["cargo-registry-cache", "cargo-registry-index"]
+
+[profiles.cargo]
+entries = ["cargo-target", "cargo-git-db"]
+
+[profiles.foundry]
+entries = ["foundry"]
+
+[profiles.npm]
+entries = ["npm-cache"]
+
+[adapters.cargo]
+profiles = ["cargo"]
+compiler-cache = "sccache"
+fail-on-cache-error = true
+
+[adapters.sccache]
+tag = "bigname-pr890-20260910-rust"
+
+[adapters.docker]
+command = ["docker", "buildx", "bake", "--file", ".github/docker-bake.hcl", "--metadata-file", "target/production-build.json"]
+tag = "bigname-pr890-20260910-docker"
+mount-cache = true
+tool-cache = ["sccache:bigname-pr890-20260910-docker-rust"]
+fail-on-cache-error = true

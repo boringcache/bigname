@@ -139,6 +139,10 @@ esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 real_cargo="${BIGNAME_E2E_REAL_CARGO:-$(command -v cargo)}"
+cargo_command=("$real_cargo")
+if [[ "${BIGNAME_CARGO_CACHE:-}" == 1 ]]; then
+    cargo_command=(boringcache cargo "--${BORINGCACHE_ACCESS:-read-only}" --skip-save)
+fi
 bridge="$repo_root/tests/e2e/cargo-phase-runner-artifact"
 if [ ! -x "$real_cargo" ]; then
     printf 'e2e gate: real Cargo is not executable: %s\n' "$real_cargo" >&2
@@ -181,12 +185,15 @@ selected_names="$gate_temp/selected.names"
 
 cd "$repo_root"
 compile_started="$(date +%s)"
-if ! "$real_cargo" test --manifest-path tests/e2e/Cargo.toml --locked -- --list >"$discovered_raw"; then
+if ! "${cargo_command[@]}" test --manifest-path tests/e2e/Cargo.toml --locked -- --list >"$discovered_raw"; then
     printf 'e2e gate: test discovery failed\n' >&2
     exit 1
 fi
 compile_finished="$(date +%s)"
-if ! "$real_cargo" test --manifest-path tests/e2e/Cargo.toml --locked -- --ignored --list >"$ignored_raw"; then
+if [[ "${BIGNAME_CARGO_CACHE:-}" == 1 ]]; then
+    cargo_command+=(--skip-restore)
+fi
+if ! "${cargo_command[@]}" test --manifest-path tests/e2e/Cargo.toml --locked -- --ignored --list >"$ignored_raw"; then
     printf 'e2e gate: ignored-test discovery failed\n' >&2
     exit 1
 fi
@@ -265,8 +272,11 @@ else
 fi
 test_args+=(--test-threads="$test_threads")
 
+if [[ "${BIGNAME_CARGO_CACHE:-}" == 1 ]]; then
+    cargo_command=(boringcache cargo "--${BORINGCACHE_ACCESS:-read-only}" --skip-restore)
+fi
 scenario_started="$(date +%s)"
-"$real_cargo" "${test_args[@]}" 2>&1 | tee "$result_log"
+"${cargo_command[@]}" "${test_args[@]}" 2>&1 | tee "$result_log"
 cargo_status="${PIPESTATUS[0]}"
 scenario_finished="$(date +%s)"
 

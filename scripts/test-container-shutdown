@@ -135,4 +135,8 @@ fi
 export BIGNAME_BUILD_SHA="$sha"
 export BIGNAME_E2E_SHUTDOWN_MODE=compose
 cd "$ROOT"
-cargo test --locked --manifest-path tests/e2e/Cargo.toml scenarios::service_shutdown::api_signals_drain_accepted_indexed_name_read -- --exact --nocapture
+cargo_command=(cargo)
+if [[ "${BIGNAME_CARGO_CACHE:-}" == 1 ]]; then
+  cargo_command=(boringcache cargo "--${BORINGCACHE_ACCESS:-read-only}")
+fi
+"${cargo_command[@]}" test --locked --manifest-path tests/e2e/Cargo.toml scenarios::service_shutdown::api_signals_drain_accepted_indexed_name_read -- --exact --nocapture

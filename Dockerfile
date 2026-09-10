@@ -8,6 +8,21 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends clang libclang-dev \
     && rm -rf /var/lib/apt/lists/*
 
+ARG TARGETARCH
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      amd64) platform=x86_64-unknown-linux-musl; checksum=67c4a96dd237c1f518f6b36083f270f9976d516f1e57fce891755ea782e50006 ;; \
+      arm64) platform=aarch64-unknown-linux-musl; checksum=821a86343191aa1cbab74bd42f9e93c9a63bf85e4742945f40d3ae84193c1c77 ;; \
+      *) echo "Unsupported sccache architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl --fail --location --silent --show-error --retry 3 \
+      "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-$platform.tar.gz" \
+      -o /tmp/sccache.tar.gz; \
+    echo "$checksum  /tmp/sccache.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/sccache.tar.gz -C /tmp; \
+    install -m 0755 "/tmp/sccache-v0.17.0-$platform/sccache" /usr/local/bin/sccache; \
+    rm -rf /tmp/sccache.tar.gz "/tmp/sccache-v0.17.0-$platform"
+
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
@@ -28,7 +43,8 @@ RUN --mount=type=cache,target=/build-cache,sharing=locked \
     CARGO_HOME=/build-cache/cargo cargo build --locked --release --workspace --bins \
         --target-dir /build-cache/target \
     && mkdir -p /out \
-    && cp /build-cache/target/release/bigname-api /build-cache/target/release/phase-runner /out/
+    && cp /build-cache/target/release/bigname-api /build-cache/target/release/phase-runner /out/ \
+    && sccache --show-stats
 
 FROM ubuntu:24.04 AS runtime
 

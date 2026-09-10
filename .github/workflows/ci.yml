@@ -7,6 +7,14 @@ on:
     branches:
       - main
 
+      - boringcache-parallel-validation
+  workflow_dispatch:
+    inputs:
+      cli_version:
+        description: Optional exact BoringCache CLI release
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 
@@ -19,8 +27,14 @@ env:
   RUSTC_WRAPPER: sccache
   RUST_VERSION: 1.93.1
   FOUNDRY_VERSION: v1.7.1
-  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_ENABLED: "false"
 
+  CARGO_INCREMENTAL: '0'
+  CC: sccache cc
+  CXX: sccache c++
+  BIGNAME_CARGO_CACHE: '1'
+  BORINGCACHE_ACCESS: write
+  RUST_LOG: error,boring_cache_cli::storage_transfer=warn
 jobs:
   static:
     runs-on: ubuntu-latest
@@ -35,18 +49,18 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           components: clippy,rustfmt
 
-      - name: Set up sccache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.10
-
-      - name: Fall back without sccache
-        if: steps.sccache.outcome != 'success'
-        run: echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.17.0
+      - name: BoringCache Cargo dependencies
+        uses: boringcache/one@404b744a2053da4cf963f13f615f7fafe94f3cf7 # v1.30.1
+        with:
+          cli-version: ${{ inputs.cli_version }}
+          mode: archive
+          cache-profiles: dependencies
+          trust-policy: publish
+          fail-on-cache-error: true
       - name: cargo fmt
         run: cargo fmt --check
 
@@ -112,40 +126,27 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang libclang-dev
 
       - name: cargo check
-        run: cargo check --workspace --all-targets --all-features
+        run: boringcache cargo "--$BORINGCACHE_ACCESS" --skip-save check --workspace --all-targets --all-features
 
       - name: cargo check (e2e workspace)
-        run: cargo check --manifest-path tests/e2e/Cargo.toml --locked --all-targets
+        run: boringcache cargo "--$BORINGCACHE_ACCESS" --skip-save check --manifest-path tests/e2e/Cargo.toml --locked --all-targets
 
       - name: cargo clippy (strict workspace packages)
-        run: cargo clippy --workspace --all-targets --all-features --exclude bigname-adapters --no-deps -- -D warnings
+        run: boringcache cargo "--$BORINGCACHE_ACCESS" --skip-restore --skip-save clippy --workspace --all-targets --all-features --exclude bigname-adapters --no-deps -- -D warnings
 
       # The adapter crate still carries pre-existing warning classes. Deny
       # every other warning here so new lint classes cannot silently widen the
       # baseline while those targeted classes are paid down.
       - name: cargo clippy (adapter warning-class baseline)
         run: >-
-          cargo clippy -p bigname-adapters --all-targets --all-features --
-          -D warnings
-          -A clippy::unusual-byte-groupings
-          -A clippy::too-many-arguments
-          -A clippy::needless-question-mark
-          -A clippy::collapsible-if
-          -A clippy::needless-borrows-for-generic-args
-          -A clippy::explicit-auto-deref
-          -A clippy::needless-borrow
-          -A clippy::filter-map-bool-then
-          -A clippy::match-like-matches-macro
-          -A clippy::borrow-deref-ref
-          -A clippy::needless-option-as-deref
-          -A clippy::needless-return
-          -A clippy::redundant-closure
-          -A clippy::bool-assert-comparison
-          -A clippy::cloned-ref-to-slice-refs
+          boringcache cargo "--$BORINGCACHE_ACCESS" --skip-restore clippy -p bigname-adapters --all-targets --all-features -- -D warnings -A clippy::unusual-byte-groupings -A clippy::too-many-arguments -A clippy::needless-question-mark -A clippy::collapsible-if -A clippy::needless-borrows-for-generic-args -A clippy::explicit-auto-deref -A clippy::needless-borrow -A clippy::filter-map-bool-then -A clippy::match-like-matches-macro -A clippy::borrow-deref-ref -A clippy::needless-option-as-deref -A clippy::needless-return -A clippy::redundant-closure -A clippy::bool-assert-comparison -A clippy::cloned-ref-to-slice-refs
 
       - name: cargo clippy (e2e workspace)
-        run: cargo clippy --manifest-path tests/e2e/Cargo.toml --locked --all-targets -- -D warnings
+        run: boringcache cargo "--$BORINGCACHE_ACCESS" --skip-restore clippy --manifest-path tests/e2e/Cargo.toml --locked --all-targets -- -D warnings
 
+    permissions:
+      contents: read
+      id-token: write
   schema_v2:
     name: test (schema v2)
     runs-on: ubuntu-latest
@@ -244,18 +245,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang libclang-dev
 
-      - name: Set up sccache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.10
-
-      - name: Fall back without sccache
-        if: steps.sccache.outcome != 'success'
-        run: echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.17.0
+      - name: BoringCache Cargo dependencies
+        uses: boringcache/one@404b744a2053da4cf963f13f615f7fafe94f3cf7 # v1.30.1
+        with:
+          cli-version: ${{ inputs.cli_version }}
+          mode: archive
+          cache-profiles: dependencies
+          trust-policy: publish
+          fail-on-cache-error: true
       - name: Sync pinned upstream checkouts
         if: matrix.name == 'core'
         run: |
@@ -270,12 +271,15 @@ jobs:
 
       - name: API tests
         if: matrix.api_shard
-        run: cargo nextest run -p bigname-api --all-features --no-fail-fast --partition slice:${{ matrix.api_shard }}/3
+        run: boringcache cargo "--$BORINGCACHE_ACCESS" nextest run -p bigname-api --all-features --no-fail-fast --partition slice:${{ matrix.api_shard }}/3
 
       - name: cargo test
         if: matrix.name == 'core'
-        run: cargo test ${{ matrix.packages }} --all-features
+        run: boringcache cargo "--$BORINGCACHE_ACCESS" test ${{ matrix.packages }} --all-features
 
+    permissions:
+      contents: read
+      id-token: write
   phase_runner_shard:
     name: test (phase-runner shard ${{ matrix.shard }}/8)
     runs-on: ubuntu-24.04
@@ -321,82 +325,30 @@ jobs:
         with:
           tool: cargo-nextest@0.9.143
 
-      - name: Set up sccache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.10
-
-      - name: Fall back without sccache
-        if: steps.sccache.outcome != 'success'
-        run: echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
-
-      - name: Compute phase-runner dependency-cache key
-        id: phase_runner_cache_key
-        run: |
-          root_lock_sha="$(sha256sum Cargo.lock | cut -d' ' -f1)"
-          e2e_lock_sha="$(sha256sum tests/e2e/Cargo.lock | cut -d' ' -f1)"
-          prefix="v1-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
-          runner_arch="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
-          primary="${prefix}-phase-runner-${RUNNER_OS}-${runner_arch}"
-          echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
-          echo "primary=$primary" >>"$GITHUB_OUTPUT"
-          echo "phase-runner dependency-cache primary key: $primary"
-
-      - name: Cache phase-runner Cargo dependencies
-        id: phase_runner_cache
-        uses: Swatinem/rust-cache@v2
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
-          prefix-key: ${{ steps.phase_runner_cache_key.outputs.prefix }}
-          shared-key: phase-runner
-          add-job-id-key: false
-          add-rust-environment-hash-key: false
-          workspaces: ". -> target"
-          cache-workspace-crates: false
-
-      - name: Report phase-runner dependency cache
-        env:
-          CACHE_HIT: ${{ steps.phase_runner_cache.outputs.cache-hit }}
-          CACHE_PRIMARY_KEY: ${{ steps.phase_runner_cache_key.outputs.primary }}
-        run: |
-          echo "phase-runner dependency-cache primary key: $CACHE_PRIMARY_KEY"
-          echo "phase-runner dependency-cache hit: $CACHE_HIT"
-          {
-            echo "### phase-runner dependency cache"
-            echo
-            echo "- Primary key: \`$CACHE_PRIMARY_KEY\`"
-            echo "- Exact hit: \`$CACHE_HIT\`"
-          } >>"$GITHUB_STEP_SUMMARY"
-
+          version: v0.17.0
+      - name: BoringCache Cargo dependencies
+        uses: boringcache/one@404b744a2053da4cf963f13f615f7fafe94f3cf7 # v1.30.1
+        with:
+          cli-version: ${{ inputs.cli_version }}
+          mode: archive
+          cache-profiles: dependencies
+          trust-policy: publish
+          fail-on-cache-error: true
       - name: cargo nextest (slice ${{ matrix.shard }}/8)
         run: >-
-          ./scripts/test-db -- cargo nextest run
-          -p phase-runner
-          -p bigname-ingest
-          -p bigname-interpret
-          -p bigname-content-hash
-          -p bigname-benchmark-gate
-          -p bigname-lookup
-          -p bigname-project
-          -p bigname-metrics
-          --all-features
-          --no-fail-fast
-          --partition slice:${{ matrix.shard }}/8
+          ./scripts/test-db -- boringcache cargo "--$BORINGCACHE_ACCESS" nextest run -p phase-runner -p bigname-ingest -p bigname-interpret -p bigname-content-hash -p bigname-benchmark-gate -p bigname-lookup -p bigname-project -p bigname-metrics --all-features --no-fail-fast --partition slice:${{ matrix.shard }}/8
 
       - name: cargo test (doctests)
         if: matrix.shard == 1
         run: >-
-          ./scripts/test-db -- cargo test
-          -p phase-runner
-          -p bigname-ingest
-          -p bigname-interpret
-          -p bigname-content-hash
-          -p bigname-benchmark-gate
-          -p bigname-lookup
-          -p bigname-project
-          -p bigname-metrics
-          --all-features
-          --doc
+          ./scripts/test-db -- boringcache cargo "--$BORINGCACHE_ACCESS" --skip-restore test -p phase-runner -p bigname-ingest -p bigname-interpret -p bigname-content-hash -p bigname-benchmark-gate -p bigname-lookup -p bigname-project -p bigname-metrics --all-features --doc
 
+    permissions:
+      contents: read
+      id-token: write
   phase_runner:
     name: test (phase-runner)
     runs-on: ubuntu-latest
@@ -420,7 +372,7 @@ jobs:
       artifact-name: ${{ steps.package.outputs.artifact-name }}
     env:
       CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: ""
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -435,44 +387,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang libclang-dev binutils
 
-      - name: Compute phase-runner dependency-cache key
-        id: phase_runner_cache_key
-        run: |
-          root_lock_sha="$(sha256sum Cargo.lock | cut -d' ' -f1)"
-          e2e_lock_sha="$(sha256sum tests/e2e/Cargo.lock | cut -d' ' -f1)"
-          prefix="v1-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
-          runner_arch="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
-          primary="${prefix}-phase-runner-${RUNNER_OS}-${runner_arch}"
-          echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
-          echo "primary=$primary" >>"$GITHUB_OUTPUT"
-          echo "phase-runner dependency-cache primary key: $primary"
-
-      - name: Cache e2e phase-runner Cargo dependencies
-        id: phase_runner_cache
-        uses: Swatinem/rust-cache@v2
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
-          prefix-key: ${{ steps.phase_runner_cache_key.outputs.prefix }}
-          shared-key: phase-runner
-          add-job-id-key: false
-          add-rust-environment-hash-key: false
-          workspaces: ". -> target"
-          cache-workspace-crates: false
-          save-if: true
-
-      - name: Report phase-runner dependency cache
-        env:
-          CACHE_HIT: ${{ steps.phase_runner_cache.outputs.cache-hit }}
-          CACHE_PRIMARY_KEY: ${{ steps.phase_runner_cache_key.outputs.primary }}
-        run: |
-          echo "phase-runner dependency-cache primary key: $CACHE_PRIMARY_KEY"
-          echo "phase-runner dependency-cache hit: $CACHE_HIT"
-          {
-            echo "### phase-runner dependency cache"
-            echo
-            echo "- Primary key: \`$CACHE_PRIMARY_KEY\`"
-            echo "- Exact hit: \`$CACHE_HIT\`"
-          } >>"$GITHUB_STEP_SUMMARY"
-
+          version: v0.17.0
+      - name: BoringCache Cargo dependencies
+        uses: boringcache/one@404b744a2053da4cf963f13f615f7fafe94f3cf7 # v1.30.1
+        with:
+          cli-version: ${{ inputs.cli_version }}
+          mode: archive
+          cache-profiles: dependencies
+          trust-policy: publish
+          fail-on-cache-error: true
       - name: Sync pinned upstream checkouts
         run: |
           scripts/sync-refs
@@ -482,7 +408,7 @@ jobs:
         id: package
         run: |
           build_started="$(date +%s)"
-          cargo build --locked --package phase-runner --bin phase-runner
+          boringcache cargo "--$BORINGCACHE_ACCESS" build --locked --package phase-runner --bin phase-runner
           build_finished="$(date +%s)"
 
           package_started="$(date +%s)"
@@ -548,8 +474,6 @@ jobs:
           {
             echo "### e2e phase-runner artifact"
             echo
-            echo "- Dependency-cache key: \`${{ steps.phase_runner_cache_key.outputs.primary }}\`"
-            echo "- Dependency-cache hit: \`${{ steps.phase_runner_cache.outputs.cache-hit }}\`"
             echo "- Build command: ${{ steps.package.outputs.build-seconds }}s"
             echo "- Strip/package: ${{ steps.package.outputs.package-seconds }}s"
             echo "- Unstripped binary: ${{ steps.package.outputs.unstripped-bytes }} bytes"
@@ -560,6 +484,9 @@ jobs:
             echo "- Action digest: \`${{ steps.artifact_upload.outputs.artifact-digest }}\`"
           } >>"$GITHUB_STEP_SUMMARY"
 
+    permissions:
+      contents: read
+      id-token: write
   e2e_shard:
     name: test (e2e shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04
@@ -592,7 +519,7 @@ jobs:
       BIGNAME_E2E_TEST_THREADS: "8"
       BIGNAME_E2E_SHARD: ${{ matrix.shard }}
       CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: ""
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -607,77 +534,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang libclang-dev
 
-      - name: Compute phase-runner dependency-cache key
-        id: phase_runner_cache_key
-        run: |
-          root_lock_sha="$(sha256sum Cargo.lock | cut -d' ' -f1)"
-          e2e_lock_sha="$(sha256sum tests/e2e/Cargo.lock | cut -d' ' -f1)"
-          prefix="v1-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
-          runner_arch="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
-          primary="${prefix}-phase-runner-${RUNNER_OS}-${runner_arch}"
-          echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
-          echo "primary=$primary" >>"$GITHUB_OUTPUT"
-          echo "phase-runner dependency-cache primary key: $primary"
-
-      - name: Restore e2e phase-runner Cargo dependencies
-        id: phase_runner_cache
-        uses: Swatinem/rust-cache@v2
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
-          prefix-key: ${{ steps.phase_runner_cache_key.outputs.prefix }}
-          shared-key: phase-runner
-          add-job-id-key: false
-          add-rust-environment-hash-key: false
-          workspaces: ". -> target"
-          cache-workspace-crates: false
-          save-if: false
-
-      - name: Wait before a second dependency-cache restore
-        if: ${{ steps.phase_runner_cache.outputs.cache-hit != 'true' }}
-        run: |
-          echo "No exact dependency-cache hit; waiting 30 seconds before one more restore."
-          sleep 30
-
-      - name: Retry e2e phase-runner dependency-cache restore
-        id: phase_runner_cache_retry
-        if: ${{ steps.phase_runner_cache.outputs.cache-hit != 'true' }}
-        uses: Swatinem/rust-cache@v2
+          version: v0.17.0
+      - name: BoringCache Cargo and Foundry data
+        uses: boringcache/one@404b744a2053da4cf963f13f615f7fafe94f3cf7 # v1.30.1
         with:
-          prefix-key: ${{ steps.phase_runner_cache_key.outputs.prefix }}
-          shared-key: phase-runner
-          add-job-id-key: false
-          add-rust-environment-hash-key: false
-          workspaces: ". -> target"
-          cache-workspace-crates: false
-          save-if: false
-
-      - name: Report phase-runner dependency cache
-        env:
-          FIRST_CACHE_HIT: ${{ steps.phase_runner_cache.outputs.cache-hit }}
-          RETRY_CACHE_HIT: ${{ steps.phase_runner_cache_retry.outputs.cache-hit }}
-          RETRY_OUTCOME: ${{ steps.phase_runner_cache_retry.outcome }}
-          CACHE_HIT: ${{ steps.phase_runner_cache.outputs.cache-hit == 'true' || steps.phase_runner_cache_retry.outputs.cache-hit == 'true' }}
-          CACHE_PRIMARY_KEY: ${{ steps.phase_runner_cache_key.outputs.primary }}
-        run: |
-          echo "phase-runner dependency-cache primary key: $CACHE_PRIMARY_KEY"
-          echo "phase-runner dependency-cache first hit: $FIRST_CACHE_HIT"
-          echo "phase-runner dependency-cache retry outcome: $RETRY_OUTCOME"
-          echo "phase-runner dependency-cache retry hit: $RETRY_CACHE_HIT"
-          echo "phase-runner dependency-cache hit: $CACHE_HIT"
-          {
-            echo "### phase-runner dependency cache"
-            echo
-            echo "- Primary key: \`$CACHE_PRIMARY_KEY\`"
-            echo "- First exact hit: \`$FIRST_CACHE_HIT\`"
-            echo "- Retry outcome: \`$RETRY_OUTCOME\`"
-            echo "- Retry exact hit: \`$RETRY_CACHE_HIT\`"
-            echo "- Exact hit: \`$CACHE_HIT\`"
-          } >>"$GITHUB_STEP_SUMMARY"
-
+          cli-version: ${{ inputs.cli_version }}
+          mode: archive
+          cache-profiles: dependencies,foundry
+          trust-policy: publish
+          fail-on-cache-error: true
       - name: Install foundry (anvil)
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: ${{ env.FOUNDRY_VERSION }}
 
+          cache: false
       - name: Sync pinned upstream checkouts
         run: |
           scripts/sync-refs
@@ -723,6 +597,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+    permissions:
+      contents: read
+      id-token: write
   production_image:
     name: build (production image)
     runs-on: ubuntu-24.04
@@ -734,40 +611,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Restore production release Cargo cache
-        id: release_cache
-        uses: actions/cache@v4
+      - name: Prepare production build metadata directory
+        run: mkdir -p target
+      - name: Build exact production image with BoringCache
+        uses: boringcache/one@404b744a2053da4cf963f13f615f7fafe94f3cf7 # v1.30.1
         with:
-          path: target/docker-release-cache
-          key: docker-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-${{ github.sha }}
-          restore-keys: |
-            docker-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-
-
-      - name: Reuse production release Cargo cache in BuildKit
-        uses: reproducible-containers/buildkit-cache-dance@4b2444fec0c0fb9dbf175a96c094720a692ef810 # v2.1.4
-        with:
-          cache-source: target/docker-release-cache
-          cache-target: /build-cache
-          scratch-dir: target/docker-cache-dance
-          skip-extraction: ${{ steps.release_cache.outputs.cache-hit }}
-
-      - name: Build exact production image
+          cli-version: ${{ inputs.cli_version }}
+          mode: docker
+          trust-policy: publish
+          fail-on-cache-error: true
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          RUST_VERSION: ${{ env.RUST_VERSION }}
+      - name: Read production build image ID
         id: shutdown_image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          load: true
-          platforms: linux/amd64
-          build-args: |
-            RUST_VERSION=${{ env.RUST_VERSION }}
-            BIGNAME_BUILD_SHA=${{ github.sha }}
-          tags: bigname-api-shutdown:${{ github.sha }}
-          labels: org.opencontainers.image.revision=${{ github.sha }}
-
+        run: python3 -c 'import json, os; data=json.load(open("target/production-build.json")); image=data["default"]["containerimage.config.digest"]; assert image.startswith("sha256:"); print("imageid=" + image, file=open(os.environ["GITHUB_OUTPUT"], "a"))'
       - name: Package exact production image
         env:
           IMAGE_ID: ${{ steps.shutdown_image.outputs.imageid }}
@@ -794,6 +652,9 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
+    permissions:
+      contents: read
+      id-token: write
   api_container_shutdown:
     name: test (API container shutdown)
     runs-on: ubuntu-24.04
@@ -817,7 +678,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      RUSTC_WRAPPER: ""
+      RUSTC_WRAPPER: "sccache"
       BIGNAME_DATABASE_URL: postgres://bigname:bigname@127.0.0.1:5432/bigname
       BIGNAME_E2E_SHUTDOWN_SOURCE_SHA: ${{ github.sha }}
       BIGNAME_E2E_SHUTDOWN_EVIDENCE: ${{ github.workspace }}/target/api-container-shutdown
@@ -831,6 +692,7 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: ${{ env.FOUNDRY_VERSION }}
+          cache: false
       - name: Install native build dependencies
         run: |
           sudo apt-get update
@@ -839,44 +701,18 @@ jobs:
         run: |
           scripts/sync-refs
           scripts/sync-refs --check
-      - name: Compute phase-runner dependency-cache key
-        id: phase_runner_cache_key
-        run: |
-          root_lock_sha="$(sha256sum Cargo.lock | cut -d' ' -f1)"
-          e2e_lock_sha="$(sha256sum tests/e2e/Cargo.lock | cut -d' ' -f1)"
-          prefix="v1-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
-          runner_arch="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
-          primary="${prefix}-phase-runner-${RUNNER_OS}-${runner_arch}"
-          echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
-          echo "primary=$primary" >>"$GITHUB_OUTPUT"
-          echo "phase-runner dependency-cache primary key: $primary"
-
-      - name: Restore e2e phase-runner Cargo dependencies
-        id: phase_runner_cache
-        uses: Swatinem/rust-cache@v2
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
-          prefix-key: ${{ steps.phase_runner_cache_key.outputs.prefix }}
-          shared-key: phase-runner
-          add-job-id-key: false
-          add-rust-environment-hash-key: false
-          workspaces: ". -> target"
-          cache-workspace-crates: false
-          save-if: false
-
-      - name: Report phase-runner dependency cache
-        env:
-          CACHE_HIT: ${{ steps.phase_runner_cache.outputs.cache-hit }}
-          CACHE_PRIMARY_KEY: ${{ steps.phase_runner_cache_key.outputs.primary }}
-        run: |
-          echo "phase-runner dependency-cache primary key: $CACHE_PRIMARY_KEY"
-          echo "phase-runner dependency-cache hit: $CACHE_HIT"
-          {
-            echo "### phase-runner dependency cache"
-            echo
-            echo "- Primary key: \`$CACHE_PRIMARY_KEY\`"
-            echo "- Exact hit: \`$CACHE_HIT\`"
-          } >>"$GITHUB_STEP_SUMMARY"
-
+          version: v0.17.0
+      - name: BoringCache Cargo and Foundry data
+        uses: boringcache/one@404b744a2053da4cf963f13f615f7fafe94f3cf7 # v1.30.1
+        with:
+          cli-version: ${{ inputs.cli_version }}
+          mode: archive
+          cache-profiles: dependencies,foundry
+          trust-policy: publish
+          fail-on-cache-error: true
       - name: Download phase-runner artifact
         uses: actions/download-artifact@v8
         with:
@@ -936,6 +772,9 @@ jobs:
           path: target/api-container-shutdown
           if-no-files-found: error
 
+    permissions:
+      contents: read
+      id-token: write
   e2e:
     name: test (e2e)
     runs-on: ubuntu-latest
@@ -1018,18 +857,18 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
 
-      - name: Set up sccache
-        id: sccache
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.10
-
-      - name: Fall back without sccache
-        if: steps.sccache.outcome != 'success'
-        run: echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.17.0
+      - name: BoringCache Cargo dependencies
+        uses: boringcache/one@404b744a2053da4cf963f13f615f7fafe94f3cf7 # v1.30.1
+        with:
+          cli-version: ${{ inputs.cli_version }}
+          mode: archive
+          cache-profiles: dependencies
+          trust-policy: publish
+          fail-on-cache-error: true
       - name: Fetch smoke dependencies
         run: |
           cargo fetch --locked
@@ -1039,14 +878,19 @@ jobs:
         run: scripts/sync-refs
 
       - name: Initialize phase schema
-        run: cargo run --locked -p phase-runner --bin phase-runner -- init-schema
+        run: boringcache cargo "--$BORINGCACHE_ACCESS" --skip-save run --locked -p phase-runner --bin phase-runner -- init-schema
 
+      - name: Build API for offline smoke checks
+        run: boringcache cargo "--$BORINGCACHE_ACCESS" --skip-restore build --locked -p bigname-api --bin bigname-api
       - name: release smoke gate (no network)
         run: ./scripts/release-smoke --no-network
 
       - name: rollback smoke gate (no network)
         run: ./scripts/rollback-smoke --no-network
 
+    permissions:
+      contents: read
+      id-token: write
   manager-graphql-compat:
     # Guards that bigname's GraphQL schema still serves every field the ENS
     # Manager's operations ask for. Validates the Manager's committed operation
@@ -1070,7 +914,7 @@ jobs:
     # unmerged code would otherwise execute with the private-repo token before
     # any merge happens. Same-repo changes were checked at PR time; queued
     # fork changes stay covered by the post-merge run on main, unchanged.
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.repository == 'ensdomains/bigname' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
     steps:
       - name: Checkout bigname
         uses: actions/checkout@v4
