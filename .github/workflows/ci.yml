@@ -23,6 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  RUST_LOG: error,boring_cache_cli::storage_transfer=warn
   CARGO_TERM_COLOR: always
   RUSTC_WRAPPER: sccache
   RUST_VERSION: 1.93.1
