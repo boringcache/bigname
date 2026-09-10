@@ -1,20 +1,13 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   merge_group:
   push:
     branches:
       - main
 
-      - upstream-parallel-validation
-  workflow_dispatch:
-    inputs:
-      cli_version:
-        description: Optional exact BoringCache CLI release
-        type: string
-        required: false
-        default: ''
 permissions:
   contents: read
 
@@ -29,7 +22,6 @@ env:
   FOUNDRY_VERSION: v1.7.1
   SCCACHE_GHA_ENABLED: "true"
 
-  SCCACHE_GHA_VERSION: bigname-pr890-20260910
 jobs:
   static:
     runs-on: ubuntu-latest
@@ -56,8 +48,6 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-        with:
-          prefix-key: bigname-pr890-20260910
       - name: cargo fmt
         run: cargo fmt --check
 
@@ -136,7 +126,23 @@ jobs:
       # baseline while those targeted classes are paid down.
       - name: cargo clippy (adapter warning-class baseline)
         run: >-
-          cargo clippy -p bigname-adapters --all-targets --all-features -- -D warnings -A clippy::unusual-byte-groupings -A clippy::too-many-arguments -A clippy::needless-question-mark -A clippy::collapsible-if -A clippy::needless-borrows-for-generic-args -A clippy::explicit-auto-deref -A clippy::needless-borrow -A clippy::filter-map-bool-then -A clippy::match-like-matches-macro -A clippy::borrow-deref-ref -A clippy::needless-option-as-deref -A clippy::needless-return -A clippy::redundant-closure -A clippy::bool-assert-comparison -A clippy::cloned-ref-to-slice-refs
+          cargo clippy -p bigname-adapters --all-targets --all-features --
+          -D warnings
+          -A clippy::unusual-byte-groupings
+          -A clippy::too-many-arguments
+          -A clippy::needless-question-mark
+          -A clippy::collapsible-if
+          -A clippy::needless-borrows-for-generic-args
+          -A clippy::explicit-auto-deref
+          -A clippy::needless-borrow
+          -A clippy::filter-map-bool-then
+          -A clippy::match-like-matches-macro
+          -A clippy::borrow-deref-ref
+          -A clippy::needless-option-as-deref
+          -A clippy::needless-return
+          -A clippy::redundant-closure
+          -A clippy::bool-assert-comparison
+          -A clippy::cloned-ref-to-slice-refs
 
       - name: cargo clippy (e2e workspace)
         run: cargo clippy --manifest-path tests/e2e/Cargo.toml --locked --all-targets -- -D warnings
@@ -251,8 +257,6 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-        with:
-          prefix-key: bigname-pr890-20260910
       - name: Sync pinned upstream checkouts
         if: matrix.name == 'core'
         run: |
@@ -332,7 +336,7 @@ jobs:
         run: |
           root_lock_sha="$(sha256sum Cargo.lock | cut -d' ' -f1)"
           e2e_lock_sha="$(sha256sum tests/e2e/Cargo.lock | cut -d' ' -f1)"
-          prefix="bigname-pr890-20260910-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
+          prefix="v1-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
           runner_arch="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
           primary="${prefix}-phase-runner-${RUNNER_OS}-${runner_arch}"
           echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
@@ -366,12 +370,33 @@ jobs:
 
       - name: cargo nextest (slice ${{ matrix.shard }}/8)
         run: >-
-          ./scripts/test-db -- cargo nextest run -p phase-runner -p bigname-ingest -p bigname-interpret -p bigname-content-hash -p bigname-benchmark-gate -p bigname-lookup -p bigname-project -p bigname-metrics --all-features --no-fail-fast --partition slice:${{ matrix.shard }}/8
+          ./scripts/test-db -- cargo nextest run
+          -p phase-runner
+          -p bigname-ingest
+          -p bigname-interpret
+          -p bigname-content-hash
+          -p bigname-benchmark-gate
+          -p bigname-lookup
+          -p bigname-project
+          -p bigname-metrics
+          --all-features
+          --no-fail-fast
+          --partition slice:${{ matrix.shard }}/8
 
       - name: cargo test (doctests)
         if: matrix.shard == 1
         run: >-
-          ./scripts/test-db -- cargo test -p phase-runner -p bigname-ingest -p bigname-interpret -p bigname-content-hash -p bigname-benchmark-gate -p bigname-lookup -p bigname-project -p bigname-metrics --all-features --doc
+          ./scripts/test-db -- cargo test
+          -p phase-runner
+          -p bigname-ingest
+          -p bigname-interpret
+          -p bigname-content-hash
+          -p bigname-benchmark-gate
+          -p bigname-lookup
+          -p bigname-project
+          -p bigname-metrics
+          --all-features
+          --doc
 
   phase_runner:
     name: test (phase-runner)
@@ -416,7 +441,7 @@ jobs:
         run: |
           root_lock_sha="$(sha256sum Cargo.lock | cut -d' ' -f1)"
           e2e_lock_sha="$(sha256sum tests/e2e/Cargo.lock | cut -d' ' -f1)"
-          prefix="bigname-pr890-20260910-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
+          prefix="v1-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
           runner_arch="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
           primary="${prefix}-phase-runner-${RUNNER_OS}-${runner_arch}"
           echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
@@ -588,7 +613,7 @@ jobs:
         run: |
           root_lock_sha="$(sha256sum Cargo.lock | cut -d' ' -f1)"
           e2e_lock_sha="$(sha256sum tests/e2e/Cargo.lock | cut -d' ' -f1)"
-          prefix="bigname-pr890-20260910-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
+          prefix="v1-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
           runner_arch="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
           primary="${prefix}-phase-runner-${RUNNER_OS}-${runner_arch}"
           echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
@@ -718,9 +743,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/docker-release-cache
-          key: bigname-pr890-20260910-docker-release-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-${{ github.sha }}
+          key: docker-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-${{ github.sha }}
           restore-keys: |
-            bigname-pr890-20260910-docker-release-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-
+            docker-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-
 
       - name: Reuse production release Cargo cache in BuildKit
         uses: reproducible-containers/buildkit-cache-dance@4b2444fec0c0fb9dbf175a96c094720a692ef810 # v2.1.4
@@ -820,7 +845,7 @@ jobs:
         run: |
           root_lock_sha="$(sha256sum Cargo.lock | cut -d' ' -f1)"
           e2e_lock_sha="$(sha256sum tests/e2e/Cargo.lock | cut -d' ' -f1)"
-          prefix="bigname-pr890-20260910-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
+          prefix="v1-rust-${RUST_VERSION}-${root_lock_sha}-${e2e_lock_sha}"
           runner_arch="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
           primary="${prefix}-phase-runner-${RUNNER_OS}-${runner_arch}"
           echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
@@ -1006,8 +1031,6 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-        with:
-          prefix-key: bigname-pr890-20260910
       - name: Fetch smoke dependencies
         run: |
           cargo fetch --locked
