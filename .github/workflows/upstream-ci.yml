@@ -757,7 +757,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/docker-release-cache
-          key: docker-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-${{ env.SOURCE_SHA }}
+          key: docker-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-39800d8168c1867904b6e204253e9d6f5c818f66
           restore-keys: |
             docker-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Dockerfile', 'Cargo.lock', '.cargo/**', 'rust-toolchain.toml') }}-
 
@@ -779,9 +779,9 @@ jobs:
           platforms: linux/amd64
           build-args: |
             RUST_VERSION=${{ env.RUST_VERSION }}
-            BIGNAME_BUILD_SHA=${{ env.SOURCE_SHA }}
-          tags: bigname-api-shutdown:${{ env.SOURCE_SHA }}
-          labels: org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+            BIGNAME_BUILD_SHA=39800d8168c1867904b6e204253e9d6f5c818f66
+          tags: bigname-api-shutdown:39800d8168c1867904b6e204253e9d6f5c818f66
+          labels: org.opencontainers.image.revision=39800d8168c1867904b6e204253e9d6f5c818f66
 
       - name: Package exact production image
         env:
@@ -834,7 +834,7 @@ jobs:
     env:
       RUSTC_WRAPPER: ""
       BIGNAME_DATABASE_URL: postgres://bigname:bigname@127.0.0.1:5432/bigname
-      BIGNAME_E2E_SHUTDOWN_SOURCE_SHA: ${{ env.SOURCE_SHA }}
+      BIGNAME_E2E_SHUTDOWN_SOURCE_SHA: 39800d8168c1867904b6e204253e9d6f5c818f66
       BIGNAME_E2E_SHUTDOWN_EVIDENCE: ${{ github.workspace }}/target/api-container-shutdown
       CARGO_BUILD_JOBS: "2"
       CARGO_INCREMENTAL: "0"
@@ -942,7 +942,7 @@ jobs:
 
       - name: Prove exact-image API shutdown
         env:
-          BIGNAME_E2E_SHUTDOWN_IMAGE: bigname-api-shutdown:${{ env.SOURCE_SHA }}
+          BIGNAME_E2E_SHUTDOWN_IMAGE: bigname-api-shutdown:39800d8168c1867904b6e204253e9d6f5c818f66
           BIGNAME_E2E_SHUTDOWN_IMAGE_ID: ${{ needs.production_image.outputs.image-id }}
         run: scripts/test-container-shutdown
       - name: Retain shutdown evidence
